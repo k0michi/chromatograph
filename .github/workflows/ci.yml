@@ -5,9 +5,14 @@ on:
     branches:
     - main
     paths:
-    - '**.swift'
-    - '**.yml'
+    - 'backend/**.swift'
+    - 'backend/**.yml'
+    - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+    - 'backend/**.swift'
+    - 'backend/**.yml'
+    - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 jobs:
@@ -19,6 +24,9 @@ jobs:
           - 'swift:latest'
     container:
       image: ${{ matrix.image }}
+    defaults:
+      run:
+        working-directory: backend
     steps:
     - name: Checkout
       uses: actions/checkout@v6
