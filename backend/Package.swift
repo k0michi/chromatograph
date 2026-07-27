@@ -4,18 +4,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "chromatograph-backend",
+    name: "ChromatographBackend",
     platforms: [.macOS(.v15), .iOS(.v18), .tvOS(.v18)],
     products: [
-        .executable(name: "chromatograph-backend", targets: ["chromatograph-backend"]),
+        .executable(name: "ChromatographBackend", targets: ["ChromatographBackend"])
     ],
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.25.0"),
-        .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.7.0"),
-        .package(url: "https://github.com/apple/swift-configuration.git", from: "1.0.0", traits: [.defaults, "CommandLineArguments"]),
+        .package(
+            url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.7.0"),
+        .package(
+            url: "https://github.com/apple/swift-configuration.git", from: "1.0.0",
+            traits: [.defaults, "CommandLineArguments"]),
     ],
     targets: [
-        .executableTarget(name: "chromatograph-backend",
+        .executableTarget(
+            name: "ChromatographBackend",
             dependencies: [
                 .product(name: "Configuration", package: "swift-configuration"),
                 .product(name: "Hummingbird", package: "hummingbird"),
@@ -23,13 +27,14 @@ let package = Package(
             ],
             path: "Sources/App"
         ),
-        .testTarget(name: "chromatograph-backendTests",
+        .testTarget(
+            name: "ChromatographBackendTests",
             dependencies: [
-                .byName(name: "chromatograph-backend"),
+                .byName(name: "ChromatographBackend"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "HummingbirdWSTesting", package: "hummingbird-websocket"),
             ],
             path: "Tests/AppTests"
-        )
+        ),
     ]
 )

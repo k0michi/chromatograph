@@ -11,7 +11,7 @@ typealias AppWSRequestContext = BasicWebSocketRequestContext
 /// - Parameter reader: configuration reader
 func buildApplication(reader: ConfigReader) async throws -> some ApplicationProtocol {
     let logger = {
-        var logger = Logger(label: "chromatograph-backend")
+        var logger = Logger(label: "ChromatographBackend")
         logger.logLevel = reader.string(forKey: "log.level", as: Logger.Level.self, default: .info)
         return logger
     }()
@@ -35,7 +35,7 @@ func buildRouter() throws -> Router<AppRequestContext> {
         LogRequestsMiddleware(.info)
     }
     // Add default endpoint
-    router.get("/") { _,_ in
+    router.get("/") { _, _ in
         return "Hello!"
     }
     return router

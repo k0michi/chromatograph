@@ -5,7 +5,7 @@ import HummingbirdWSTesting
 import Logging
 import Testing
 
-@testable import chromatograph-backend
+@testable import ChromatographBackend
 
 private let reader = ConfigReader(providers: [
     InMemoryProvider(values: [

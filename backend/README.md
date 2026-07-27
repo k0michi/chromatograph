@@ -1,2 +1,2 @@
-# chromatograph-backend
+# ChromatographBackend
 Hummingbird server framework project
