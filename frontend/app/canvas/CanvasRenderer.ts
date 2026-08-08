@@ -87,29 +87,24 @@ export class CanvasRenderer {
       entries: [{ binding: IMAGE_BINDING, type: "texture" }],
     });
 
-    const vertexShader = device.createShader({ stage: ShaderStage.VERTEX, source: VERTEX_SHADER });
-    const fragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: FRAGMENT_SHADER });
-    try {
-      this.pipeline = device.createRenderPipeline({
-        vertexShader,
-        fragmentShader,
-        topology: "triangle-strip",
-        blend: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
-        bindGroupLayout: this.bindGroupLayout,
-        vertexBuffers: [
-          {
-            arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
-            attributes: [
-              { shaderLocation: 0, format: "float32x2", offset: 0 },
-              { shaderLocation: 1, format: "float32x2", offset: 2 * Float32Array.BYTES_PER_ELEMENT },
-            ],
-          },
-        ],
-      });
-    } finally {
-      vertexShader.dispose();
-      fragmentShader.dispose();
-    }
+    using vertexShader = device.createShader({ stage: ShaderStage.VERTEX, source: VERTEX_SHADER });
+    using fragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: FRAGMENT_SHADER });
+    this.pipeline = device.createRenderPipeline({
+      vertexShader,
+      fragmentShader,
+      topology: "triangle-strip",
+      blend: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
+      bindGroupLayout: this.bindGroupLayout,
+      vertexBuffers: [
+        {
+          arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
+          attributes: [
+            { shaderLocation: 0, format: "float32x2", offset: 0 },
+            { shaderLocation: 1, format: "float32x2", offset: 2 * Float32Array.BYTES_PER_ELEMENT },
+          ],
+        },
+      ],
+    });
 
     this.quad = new QuadGeometry(device);
   }
@@ -143,14 +138,10 @@ export class CanvasRenderer {
   }
 
   private paintOperationOntoSnapshot(snapshot: TileSnapshot, operation: BlendOperation): void {
-    const texture = this.device.createTexture({
+    using texture = this.device.createTexture({
       source: { width: TILE_SIZE, height: TILE_SIZE, data: operation.imageBytes },
     });
-    try {
-      this.paintOntoSnapshot(snapshot, this.createPatchBindGroup(texture), operation.opacity);
-    } finally {
-      texture.dispose();
-    }
+    this.paintOntoSnapshot(snapshot, this.createPatchBindGroup(texture), operation.opacity);
   }
 
   createEmptySnapshot(): TileSnapshot {
