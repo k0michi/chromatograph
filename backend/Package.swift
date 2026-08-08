@@ -16,6 +16,7 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-configuration.git", from: "1.0.0",
             traits: [.defaults, "CommandLineArguments"]),
+        .package(url: "https://github.com/ainame/Swift-WebP.git", from: "0.6.1"),
     ],
     targets: [
         .executableTarget(
@@ -24,6 +25,7 @@ let package = Package(
                 .product(name: "Configuration", package: "swift-configuration"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
+                .product(name: "WebP", package: "Swift-WebP"),
             ],
             path: "Sources/App"
         ),
