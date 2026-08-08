@@ -1,6 +1,7 @@
 import type { mat3 } from "gl-matrix";
 import type { BindGroup } from "./BindGroup";
 import type { Buffer } from "./Buffer";
+import { BufferUsage, hasBufferUsage } from "./BufferUsage";
 import type { RenderPipeline } from "./RenderPipeline";
 
 export class RenderPassEncoder {
@@ -25,6 +26,9 @@ export class RenderPassEncoder {
     const layout = this.requirePipeline().vertexBuffers[slot];
     if (!layout) {
       throw new Error(`No vertex buffer layout declared for slot ${slot}.`);
+    }
+    if (!hasBufferUsage(buffer.usage, BufferUsage.VERTEX)) {
+      throw new Error("setVertexBuffer() was passed a Buffer that was not created with BufferUsage.VERTEX.");
     }
     buffer.bind(gl.ARRAY_BUFFER);
     for (const attribute of layout.attributes) {

@@ -87,7 +87,7 @@ export class CanvasRenderer {
       fragmentShader.dispose();
     }
 
-    this.quad = new QuadGeometry(device, gl);
+    this.quad = new QuadGeometry(device);
   }
 
   createPatchBindGroup(texture: Texture): BindGroup {
