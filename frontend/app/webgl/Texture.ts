@@ -1,14 +1,32 @@
+import { resolveAddressMode, type AddressMode } from "./AddressMode";
 import type { Disposable } from "./Disposable";
+import { resolveFilterMode, type FilterMode } from "./FilterMode";
+import type { MipmapFilterMode } from "./MipmapFilterMode";
 import { resolveTextureFormat, type TextureFormat } from "./TextureFormat";
 
 export interface TextureDescriptor {
   target?: GLenum;
   source: TexImageSource;
   format?: TextureFormat;
-  wrapS?: GLenum;
-  wrapT?: GLenum;
-  minFilter?: GLenum;
-  magFilter?: GLenum;
+  wrapS?: AddressMode;
+  wrapT?: AddressMode;
+  minFilter?: FilterMode;
+  magFilter?: FilterMode;
+  mipmapFilter?: MipmapFilterMode;
+}
+
+function resolveMinFilter(
+  gl: WebGL2RenderingContext,
+  minFilter: FilterMode,
+  mipmapFilter: MipmapFilterMode | undefined,
+): GLenum {
+  if (!mipmapFilter) {
+    return resolveFilterMode(gl, minFilter);
+  }
+  if (minFilter === "nearest") {
+    return mipmapFilter === "nearest" ? gl.NEAREST_MIPMAP_NEAREST : gl.NEAREST_MIPMAP_LINEAR;
+  }
+  return mipmapFilter === "nearest" ? gl.LINEAR_MIPMAP_NEAREST : gl.LINEAR_MIPMAP_LINEAR;
 }
 
 export class Texture implements Disposable {
@@ -26,14 +44,29 @@ export class Texture implements Disposable {
     this.handle = texture;
     this.target = descriptor.target ?? gl.TEXTURE_2D;
 
-    const resolved = resolveTextureFormat(gl, descriptor.format ?? "rgba8unorm");
+    const resolvedFormat = resolveTextureFormat(gl, descriptor.format ?? "rgba8unorm");
 
     gl.bindTexture(this.target, texture);
-    gl.texImage2D(this.target, 0, resolved.internalFormat, resolved.format, resolved.type, descriptor.source);
-    gl.texParameteri(this.target, gl.TEXTURE_WRAP_S, descriptor.wrapS ?? gl.CLAMP_TO_EDGE);
-    gl.texParameteri(this.target, gl.TEXTURE_WRAP_T, descriptor.wrapT ?? gl.CLAMP_TO_EDGE);
-    gl.texParameteri(this.target, gl.TEXTURE_MIN_FILTER, descriptor.minFilter ?? gl.LINEAR);
-    gl.texParameteri(this.target, gl.TEXTURE_MAG_FILTER, descriptor.magFilter ?? gl.LINEAR);
+    gl.texImage2D(
+      this.target,
+      0,
+      resolvedFormat.internalFormat,
+      resolvedFormat.format,
+      resolvedFormat.type,
+      descriptor.source,
+    );
+    gl.texParameteri(this.target, gl.TEXTURE_WRAP_S, resolveAddressMode(gl, descriptor.wrapS ?? "clamp-to-edge"));
+    gl.texParameteri(this.target, gl.TEXTURE_WRAP_T, resolveAddressMode(gl, descriptor.wrapT ?? "clamp-to-edge"));
+    gl.texParameteri(
+      this.target,
+      gl.TEXTURE_MIN_FILTER,
+      resolveMinFilter(gl, descriptor.minFilter ?? "linear", descriptor.mipmapFilter),
+    );
+    gl.texParameteri(this.target, gl.TEXTURE_MAG_FILTER, resolveFilterMode(gl, descriptor.magFilter ?? "linear"));
+
+    if (descriptor.mipmapFilter) {
+      gl.generateMipmap(this.target);
+    }
   }
 
   dispose(): void {

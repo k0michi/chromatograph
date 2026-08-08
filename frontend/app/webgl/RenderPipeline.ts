@@ -1,12 +1,14 @@
 import type { mat3 } from "gl-matrix";
+import { resolveBlendFactor, type BlendFactor } from "./BlendFactor";
 import type { BindGroupLayout } from "./BindGroupLayout";
 import type { Disposable } from "./Disposable";
+import { resolvePrimitiveTopology, type PrimitiveTopology } from "./PrimitiveTopology";
 import type { Shader } from "./Shader";
 import { resolveVertexFormat, type VertexFormat } from "./VertexFormat";
 
 export interface BlendState {
-  srcFactor: GLenum;
-  dstFactor: GLenum;
+  srcFactor: BlendFactor;
+  dstFactor: BlendFactor;
 }
 
 export interface VertexAttributeDescriptor {
@@ -23,10 +25,16 @@ export interface VertexBufferLayoutDescriptor {
 export interface RenderPipelineDescriptor {
   vertexShader: Shader;
   fragmentShader: Shader;
-  topology: GLenum;
+  topology: PrimitiveTopology;
   blend?: BlendState;
   bindGroupLayout: BindGroupLayout;
   vertexBuffers: VertexBufferLayoutDescriptor[];
+}
+
+/** @internal */
+interface ResolvedBlendState {
+  srcFactor: GLenum;
+  dstFactor: GLenum;
 }
 
 /** @internal */
@@ -48,8 +56,10 @@ interface ResolvedVertexBufferLayout {
 export class RenderPipeline implements Disposable {
   private readonly handle: WebGLProgram;
   private readonly uniformLocations = new Map<string, WebGLUniformLocation>();
+  /** @internal */
   readonly topology: GLenum;
-  readonly blend?: BlendState;
+  /** @internal */
+  readonly blend?: ResolvedBlendState;
   readonly bindGroupLayout: BindGroupLayout;
   /** @internal */
   readonly vertexBuffers: readonly ResolvedVertexBufferLayout[];
@@ -74,8 +84,13 @@ export class RenderPipeline implements Disposable {
       throw new Error(`Failed to link WebGL program: ${info}`);
     }
 
-    this.topology = descriptor.topology;
-    this.blend = descriptor.blend;
+    this.topology = resolvePrimitiveTopology(gl, descriptor.topology);
+    this.blend = descriptor.blend
+      ? {
+        srcFactor: resolveBlendFactor(gl, descriptor.blend.srcFactor),
+        dstFactor: resolveBlendFactor(gl, descriptor.blend.dstFactor),
+      }
+      : undefined;
     this.bindGroupLayout = descriptor.bindGroupLayout;
     this.vertexBuffers = descriptor.vertexBuffers.map((layout) => ({
       arrayStride: layout.arrayStride,

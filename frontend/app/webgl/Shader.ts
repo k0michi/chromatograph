@@ -1,7 +1,8 @@
 import type { Disposable } from "./Disposable";
+import { resolveShaderStage, type ShaderStage } from "./ShaderStage";
 
 export interface ShaderDescriptor {
-  type: GLenum;
+  stage: ShaderStage;
   source: string;
 }
 
@@ -12,7 +13,7 @@ export class Shader implements Disposable {
     private readonly gl: WebGL2RenderingContext,
     descriptor: ShaderDescriptor,
   ) {
-    const shader = gl.createShader(descriptor.type);
+    const shader = gl.createShader(resolveShaderStage(gl, descriptor.stage));
     if (!shader) {
       throw new Error("Failed to create a WebGL shader.");
     }

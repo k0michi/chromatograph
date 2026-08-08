@@ -4,6 +4,7 @@ import type { BindGroupLayout } from "~/webgl/BindGroupLayout";
 import { Context } from "~/webgl/Context";
 import type { Device } from "~/webgl/Device";
 import type { RenderPipeline } from "~/webgl/RenderPipeline";
+import { ShaderStage } from "~/webgl/ShaderStage";
 import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
 import { QuadGeometry } from "./QuadGeometry";
@@ -62,14 +63,14 @@ export class CanvasRenderer {
       entries: [{ binding: IMAGE_BINDING, type: "texture" }],
     });
 
-    const vertexShader = device.createShader({ type: gl.VERTEX_SHADER, source: VERTEX_SHADER });
-    const fragmentShader = device.createShader({ type: gl.FRAGMENT_SHADER, source: FRAGMENT_SHADER });
+    const vertexShader = device.createShader({ stage: ShaderStage.VERTEX, source: VERTEX_SHADER });
+    const fragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: FRAGMENT_SHADER });
     try {
       this.pipeline = device.createRenderPipeline({
         vertexShader,
         fragmentShader,
-        topology: gl.TRIANGLE_STRIP,
-        blend: { srcFactor: gl.SRC_ALPHA, dstFactor: gl.ONE_MINUS_SRC_ALPHA },
+        topology: "triangle-strip",
+        blend: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
         bindGroupLayout: this.bindGroupLayout,
         vertexBuffers: [
           {
