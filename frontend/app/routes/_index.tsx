@@ -48,7 +48,7 @@ export default function Index() {
       spacing: 0.15,
     });
     brushRef.current = brush;
-    const stroke = new BrushStroke(renderer, brush);
+    let stroke: BrushStroke | null = null;
 
     let animationFrame = requestAnimationFrame(function loop() {
       renderer.render();
@@ -97,6 +97,7 @@ export default function Index() {
       }
       isPainting = true;
       const world = worldFromEvent(event);
+      stroke = new BrushStroke(renderer, brush);
       stroke.begin(world.x, world.y);
     };
     const onPointerMove = (event: PointerEvent) => {
@@ -109,13 +110,17 @@ export default function Index() {
       }
       if (isPainting) {
         const world = worldFromEvent(event);
-        stroke.moveTo(world.x, world.y);
+        stroke?.moveTo(world.x, world.y);
       }
     };
     const onPointerUp = (event: PointerEvent) => {
       panOrigin = null;
       isPainting = false;
-      stroke.end();
+      const completedStroke = stroke;
+      stroke = null;
+      completedStroke?.end().catch((error: unknown) => {
+        console.error("Failed to commit stroke:", error);
+      });
       canvas.releasePointerCapture(event.pointerId);
     };
     const onWheel = (event: WheelEvent) => {

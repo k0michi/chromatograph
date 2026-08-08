@@ -1,11 +1,23 @@
+import { Bytes } from "~/crypto/bytes";
+import { Hex } from "~/crypto/hex";
+import type { Identity } from "~/crypto/Identity";
+import { Sha256 } from "~/crypto/sha256";
 import type { BlendOperation } from "./Operation";
-
-let nextLocalPatchId = 0;
+import { OperationEncoder } from "./serializeOperations";
 
 export class Patch {
-  readonly hash: string;
+  private constructor(
+    readonly operations: readonly BlendOperation[],
+    readonly publicKeyHex: string,
+    readonly hash: string,
+    readonly signatureHex: string,
+  ) { }
 
-  constructor(readonly operations: readonly BlendOperation[]) {
-    this.hash = `local-${(nextLocalPatchId++).toString(36).padStart(8, "0")}`;
+  static async create(operations: readonly BlendOperation[], identity: Identity): Promise<Patch> {
+    const operationBytes = OperationEncoder.operations(operations);
+    const hashInput = Bytes.concat([operationBytes, identity.publicKeyBytes]);
+    const hashBytes = await Sha256.digest(hashInput);
+    const signatureBytes = await identity.sign(hashBytes);
+    return new Patch(operations, identity.publicKeyHex, Hex.fromBytes(hashBytes), Hex.fromBytes(signatureBytes));
   }
 }

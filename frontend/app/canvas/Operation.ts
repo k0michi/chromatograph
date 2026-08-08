@@ -27,6 +27,7 @@ export interface BlendOperation {
   readonly compositeOp: CompositeOp;
   readonly blendMode: BlendMode;
   readonly opacity: number;
+  readonly imageBytes: Uint8Array<ArrayBuffer>;
   readonly texture: Texture;
   readonly bindGroup: BindGroup;
 }

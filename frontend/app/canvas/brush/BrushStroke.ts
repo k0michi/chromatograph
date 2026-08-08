@@ -58,31 +58,37 @@ export class BrushStroke {
     this.lastStampPoint = { x: lastX, y: lastY };
   }
 
-  end(): void {
+  async end(): Promise<void> {
     this.lastStampPoint = null;
     if (this.touchedChunks.size === 0) {
       return;
     }
 
-    const operations: BlendOperation[] = [];
-    for (const accumulation of this.touchedChunks.values()) {
-      operations.push({
-        type: "blend",
-        chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
-        parents: [],
-        compositeOp: CompositeOp.SourceOver,
-        blendMode: BlendMode.Normal,
-        opacity: 1,
-        texture: accumulation.texture,
-        bindGroup: accumulation.bindGroup,
-      });
-      this.renderer.uncommittedOverlays.delete(chunkKey(accumulation.chunkX, accumulation.chunkY));
-      accumulation.framebuffer.dispose();
+    const touched = Array.from(this.touchedChunks.values());
+    const operations: BlendOperation[] = touched.map((accumulation) => ({
+      type: "blend",
+      chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
+      parents: [],
+      compositeOp: CompositeOp.SourceOver,
+      blendMode: BlendMode.Normal,
+      opacity: 1,
+      imageBytes: accumulation.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE),
+      texture: accumulation.texture,
+      bindGroup: accumulation.bindGroup,
+    }));
+
+    try {
+      await this.renderer.commitPatch(operations);
+    } finally {
+      for (const accumulation of touched) {
+        const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
+        if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.bindGroup) {
+          this.renderer.uncommittedOverlays.delete(key);
+        }
+        accumulation.framebuffer.dispose();
+      }
+      this.touchedChunks.clear();
     }
-
-    this.renderer.commitPatch(operations);
-
-    this.touchedChunks.clear();
   }
 
   private stampAt(worldX: number, worldY: number): void {

@@ -1,4 +1,5 @@
 import { mat3 } from "gl-matrix";
+import { Identity } from "~/crypto/Identity";
 import type { BindGroup } from "~/webgl/BindGroup";
 import type { BindGroupLayout } from "~/webgl/BindGroupLayout";
 import { Context, type RenderPassTarget } from "~/webgl/Context";
@@ -73,6 +74,7 @@ export class CanvasRenderer {
 
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
+  private readonly identity: Promise<Identity> = Identity.generate();
 
   constructor(canvas: HTMLCanvasElement) {
     this.context = new Context(canvas);
@@ -152,8 +154,8 @@ export class CanvasRenderer {
     snapshot.framebuffer.dispose();
   }
 
-  commitPatch(operations: readonly BlendOperation[]): void {
-    const patch = new Patch(operations);
+  async commitPatch(operations: readonly BlendOperation[]): Promise<void> {
+    const patch = await Patch.create(operations, await this.identity);
     const entries: HistoryRecord["entries"] = [];
 
     for (const operation of operations) {
