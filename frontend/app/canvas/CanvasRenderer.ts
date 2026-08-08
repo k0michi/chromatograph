@@ -10,9 +10,10 @@ import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
 import { CHUNK_VIEW_PROJECTION } from "./chunkSpace";
 import type { BlendOperation } from "./Operation";
+import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
-import { TILE_SIZE, type Tile, type TileSnapshot } from "./Tile";
+import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from "./Tile";
 
 const VERTEX_SHADER = `#version 300 es
 layout(location = 0) in vec2 aPosition;
@@ -46,11 +47,17 @@ void main() {
 const BACKGROUND_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 const IMAGE_BINDING = 0;
 const SNAPSHOT_MODEL = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, 0, 0, 1);
+const SNAPSHOT_MVP = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, SNAPSHOT_MODEL);
 
 export interface UncommittedOverlay {
   chunkX: number;
   chunkY: number;
   bindGroup: BindGroup;
+}
+
+interface HistoryRecord {
+  patch: Patch;
+  entries: { tile: Tile; entry: TileOperationEntry }[];
 }
 
 export class CanvasRenderer {
@@ -63,6 +70,9 @@ export class CanvasRenderer {
   readonly camera = new Camera2D();
   readonly tiles = new TileStore();
   readonly uncommittedOverlays = new Map<string, UncommittedOverlay>();
+
+  private readonly undoStack: HistoryRecord[] = [];
+  private readonly redoStack: HistoryRecord[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.context = new Context(canvas);
@@ -123,18 +133,9 @@ export class CanvasRenderer {
     pass.draw(this.quad.vertexCount);
   }
 
-  commitOperation(tile: Tile, patchHash: string, op: BlendOperation): void {
-    tile.addOperation(patchHash, op);
-    this.applyToSnapshot(tile, op);
-  }
-
-  private applyToSnapshot(tile: Tile, op: BlendOperation): void {
-    if (!tile.snapshot) {
-      tile.snapshot = this.createEmptySnapshot();
-    }
-    const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, SNAPSHOT_MODEL);
-    const pass = this.beginPass({ framebuffer: tile.snapshot.framebuffer, width: TILE_SIZE, height: TILE_SIZE });
-    this.drawQuad(pass, mvp, op.bindGroup, op.opacity);
+  private paintOntoSnapshot(snapshot: TileSnapshot, bindGroup: BindGroup, opacity: number): void {
+    const pass = this.beginPass({ framebuffer: snapshot.framebuffer, width: TILE_SIZE, height: TILE_SIZE });
+    this.drawQuad(pass, SNAPSHOT_MVP, bindGroup, opacity);
     pass.end();
   }
 
@@ -144,6 +145,82 @@ export class CanvasRenderer {
     const bindGroup = this.createPatchBindGroup(texture);
     this.beginPass({ framebuffer, width: TILE_SIZE, height: TILE_SIZE }, [0, 0, 0, 0]).end();
     return { texture, bindGroup, framebuffer };
+  }
+
+  private disposeSnapshot(snapshot: TileSnapshot): void {
+    snapshot.texture.dispose();
+    snapshot.framebuffer.dispose();
+  }
+
+  commitPatch(operations: readonly BlendOperation[]): void {
+    const patch = new Patch(operations);
+    const entries: HistoryRecord["entries"] = [];
+
+    for (const operation of operations) {
+      const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
+      const entry = tile.addOperation(patch.hash, operation);
+      if (!tile.snapshot) {
+        tile.snapshot = this.createEmptySnapshot();
+      }
+      this.paintOntoSnapshot(tile.snapshot, operation.bindGroup, operation.opacity);
+      entries.push({ tile, entry });
+    }
+
+    this.undoStack.push({ patch, entries });
+    this.redoStack.length = 0;
+  }
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  get canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
+  undo(): void {
+    const record = this.undoStack.pop();
+    if (!record) {
+      return;
+    }
+    const tiles = new Set<Tile>();
+    for (const { tile, entry } of record.entries) {
+      entry.active = false;
+      tiles.add(tile);
+    }
+    for (const tile of tiles) {
+      this.rebuildSnapshot(tile);
+    }
+    this.redoStack.push(record);
+  }
+
+  redo(): void {
+    const record = this.redoStack.pop();
+    if (!record) {
+      return;
+    }
+    const tiles = new Set<Tile>();
+    for (const { tile, entry } of record.entries) {
+      entry.active = true;
+      tiles.add(tile);
+    }
+    for (const tile of tiles) {
+      this.rebuildSnapshot(tile);
+    }
+    this.undoStack.push(record);
+  }
+
+  private rebuildSnapshot(tile: Tile): void {
+    const rebuilt = this.createEmptySnapshot();
+    for (const entry of tile.operationEntries) {
+      if (entry.active) {
+        this.paintOntoSnapshot(rebuilt, entry.op.bindGroup, entry.op.opacity);
+      }
+    }
+    if (tile.snapshot) {
+      this.disposeSnapshot(tile.snapshot);
+    }
+    tile.snapshot = rebuilt;
   }
 
   render(): void {
@@ -212,8 +289,7 @@ export class CanvasRenderer {
         }
       }
       if (tile.snapshot) {
-        tile.snapshot.texture.dispose();
-        tile.snapshot.framebuffer.dispose();
+        this.disposeSnapshot(tile.snapshot);
       }
     }
   }

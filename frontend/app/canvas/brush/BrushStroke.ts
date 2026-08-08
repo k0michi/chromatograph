@@ -5,7 +5,6 @@ import type { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
 import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
 import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
-import { Patch } from "../Patch";
 import { TILE_SIZE } from "../Tile";
 import type { Brush } from "./Brush";
 
@@ -81,11 +80,7 @@ export class BrushStroke {
       accumulation.framebuffer.dispose();
     }
 
-    const patch = new Patch(operations);
-    for (const operation of operations) {
-      const tile = this.renderer.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
-      this.renderer.commitOperation(tile, patch.hash, operation);
-    }
+    this.renderer.commitPatch(operations);
 
     this.touchedChunks.clear();
   }

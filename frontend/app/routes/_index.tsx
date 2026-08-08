@@ -12,6 +12,7 @@ export function meta(_args: Route.MetaArgs) {
 export default function Index() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const brushRef = useRef<Brush | null>(null);
+  const rendererRef = useRef<CanvasRenderer | null>(null);
 
   const [color, setColor] = useState("#222222");
   const [size, setSize] = useState(40);
@@ -36,6 +37,7 @@ export default function Index() {
     }
 
     const renderer = new CanvasRenderer(canvas);
+    rendererRef.current = renderer;
 
     const brush = new Brush({
       tip: new RoundBrushTip(),
@@ -65,6 +67,20 @@ export default function Index() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") {
         isSpaceHeld = true;
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          renderer.redo();
+        } else {
+          renderer.undo();
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        renderer.redo();
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -127,6 +143,7 @@ export default function Index() {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("wheel", onWheel);
       brushRef.current = null;
+      rendererRef.current = null;
       brush.dispose();
       renderer.dispose();
     };
@@ -191,7 +208,15 @@ export default function Index() {
             onChange={(event) => setOpacity(Number(event.target.value))}
           />
         </label>
-        <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={() => rendererRef.current?.undo()}>
+            Undo
+          </button>
+          <button type="button" onClick={() => rendererRef.current?.redo()}>
+            Redo
+          </button>
+        </div>
+        <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
     </>
   );
