@@ -61,4 +61,11 @@ export class Brush {
     this.cache.set(key, stamp);
     return stamp;
   }
+
+  dispose(): void {
+    for (const stamp of this.cache.values()) {
+      stamp.texture.dispose();
+    }
+    this.cache.clear();
+  }
 }

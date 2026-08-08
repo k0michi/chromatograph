@@ -127,6 +127,7 @@ export default function Index() {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("wheel", onWheel);
       brushRef.current = null;
+      brush.dispose();
       renderer.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -7,7 +7,7 @@ import { resolveTextureFormat, type TextureFormat } from "./TextureFormat";
 export interface RawImageSource {
   width: number;
   height: number;
-  data: ArrayBufferView;
+  data: ArrayBufferView | null;
 }
 
 export interface TextureDescriptor {

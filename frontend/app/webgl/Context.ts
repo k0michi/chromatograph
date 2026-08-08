@@ -1,4 +1,5 @@
 import { Device } from "./Device";
+import type { Framebuffer } from "./Framebuffer";
 import { RenderPassEncoder } from "./RenderPassEncoder";
 
 export interface ContextDescriptor {
@@ -6,8 +7,15 @@ export interface ContextDescriptor {
   antialias?: boolean;
 }
 
+export interface RenderPassTarget {
+  framebuffer: Framebuffer;
+  width: number;
+  height: number;
+}
+
 export interface RenderPassDescriptor {
   clearColor?: [number, number, number, number];
+  target?: RenderPassTarget;
 }
 
 export class Context {
@@ -48,9 +56,17 @@ export class Context {
   }
 
   beginRenderPass(descriptor: RenderPassDescriptor = {}): RenderPassEncoder {
+    const { gl } = this;
+    if (descriptor.target) {
+      descriptor.target.framebuffer.bind();
+      gl.viewport(0, 0, descriptor.target.width, descriptor.target.height);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    }
     if (descriptor.clearColor) {
       this.clear(...descriptor.clearColor);
     }
-    return new RenderPassEncoder(this.gl);
+    return new RenderPassEncoder(gl);
   }
 }

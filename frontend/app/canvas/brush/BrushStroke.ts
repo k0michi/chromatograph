@@ -1,10 +1,29 @@
+import { mat3 } from "gl-matrix";
+import type { BindGroup } from "~/webgl/BindGroup";
+import type { Framebuffer } from "~/webgl/Framebuffer";
+import type { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
+import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
+import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
 import { Patch } from "../Patch";
 import { TILE_SIZE } from "../Tile";
 import type { Brush } from "./Brush";
 
+interface ChunkAccumulation {
+  chunkX: number;
+  chunkY: number;
+  texture: Texture;
+  framebuffer: Framebuffer;
+  bindGroup: BindGroup;
+}
+
+function chunkKey(chunkX: number, chunkY: number): string {
+  return `${chunkX},${chunkY}`;
+}
+
 export class BrushStroke {
   private lastStampPoint: { x: number; y: number } | null = null;
+  private readonly touchedChunks = new Map<string, ChunkAccumulation>();
 
   constructor(
     private readonly renderer: CanvasRenderer,
@@ -42,15 +61,81 @@ export class BrushStroke {
 
   end(): void {
     this.lastStampPoint = null;
+    if (this.touchedChunks.size === 0) {
+      return;
+    }
+
+    const operations: BlendOperation[] = [];
+    for (const accumulation of this.touchedChunks.values()) {
+      operations.push({
+        type: "blend",
+        chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
+        parents: [],
+        compositeOp: CompositeOp.SourceOver,
+        blendMode: BlendMode.Normal,
+        opacity: 1,
+        texture: accumulation.texture,
+        bindGroup: accumulation.bindGroup,
+      });
+      this.renderer.uncommittedOverlays.delete(chunkKey(accumulation.chunkX, accumulation.chunkY));
+      accumulation.framebuffer.dispose();
+    }
+
+    const patch = new Patch(operations);
+    for (const operation of operations) {
+      const tile = this.renderer.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
+      this.renderer.commitOperation(tile, patch.hash, operation);
+    }
+
+    this.touchedChunks.clear();
   }
 
   private stampAt(worldX: number, worldY: number): void {
-    const { texture, bindGroup } = this.brush.getStamp(this.renderer);
+    const { bindGroup: stampBindGroup } = this.brush.getStamp(this.renderer);
     const { size, opacity } = this.brush.settings;
-    const patch = new Patch(texture, bindGroup, opacity, worldX - size / 2, worldY - size / 2, size);
 
-    const tileX = Math.floor(worldX / TILE_SIZE);
-    const tileY = Math.floor(worldY / TILE_SIZE);
-    this.renderer.tiles.getOrCreate(tileX, tileY).addPatch(patch);
+    const minChunkX = Math.floor((worldX - size / 2) / TILE_SIZE);
+    const maxChunkX = Math.floor((worldX + size / 2) / TILE_SIZE);
+    const minChunkY = Math.floor((worldY - size / 2) / TILE_SIZE);
+    const maxChunkY = Math.floor((worldY + size / 2) / TILE_SIZE);
+
+    for (let chunkY = minChunkY; chunkY <= maxChunkY; chunkY++) {
+      for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+        const accumulation = this.getOrCreateAccumulation(chunkX, chunkY);
+        const localX = worldX - chunkX * TILE_SIZE - size / 2;
+        const localY = worldY - chunkY * TILE_SIZE - size / 2;
+        const model = mat3.fromValues(size, 0, 0, 0, size, 0, localX, localY, 1);
+        const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
+
+        const pass = this.renderer.beginPass({
+          framebuffer: accumulation.framebuffer,
+          width: TILE_SIZE,
+          height: TILE_SIZE,
+        });
+        this.renderer.drawQuad(pass, mvp, stampBindGroup, opacity);
+        pass.end();
+      }
+    }
+  }
+
+  private getOrCreateAccumulation(chunkX: number, chunkY: number): ChunkAccumulation {
+    const key = chunkKey(chunkX, chunkY);
+    const existing = this.touchedChunks.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const texture = this.renderer.device.createTexture({
+      source: { width: TILE_SIZE, height: TILE_SIZE, data: null },
+    });
+    const framebuffer = this.renderer.device.createFramebuffer({ colorAttachment: texture });
+    const bindGroup = this.renderer.createPatchBindGroup(texture);
+
+    this.renderer.beginPass({ framebuffer, width: TILE_SIZE, height: TILE_SIZE }, [0, 0, 0, 0]).end();
+
+    const accumulation: ChunkAccumulation = { chunkX, chunkY, texture, framebuffer, bindGroup };
+    this.touchedChunks.set(key, accumulation);
+    this.renderer.uncommittedOverlays.set(key, { chunkX, chunkY, bindGroup });
+    return accumulation;
   }
 }

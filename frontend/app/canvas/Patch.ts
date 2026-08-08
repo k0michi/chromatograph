@@ -1,13 +1,11 @@
-import type { BindGroup } from "~/webgl/BindGroup";
-import type { Texture } from "~/webgl/Texture";
+import type { BlendOperation } from "./Operation";
+
+let nextLocalPatchId = 0;
 
 export class Patch {
-  constructor(
-    readonly texture: Texture,
-    readonly bindGroup: BindGroup,
-    readonly opacity: number,
-    readonly x: number,
-    readonly y: number,
-    readonly size: number,
-  ) { }
+  readonly hash: string;
+
+  constructor(readonly operations: readonly BlendOperation[]) {
+    this.hash = `local-${(nextLocalPatchId++).toString(36).padStart(8, "0")}`;
+  }
 }
