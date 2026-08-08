@@ -31,3 +31,11 @@ export interface BlendOperation {
   readonly texture: Texture;
   readonly bindGroup: BindGroup;
 }
+
+export interface UndoOperation {
+  readonly type: "undo";
+  readonly chunk: TileChunk;
+  readonly parents: readonly string[];
+}
+
+export type Operation = BlendOperation | UndoOperation;

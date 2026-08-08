@@ -2,18 +2,18 @@ import { Bytes } from "~/crypto/bytes";
 import { Hex } from "~/crypto/hex";
 import type { Identity } from "~/crypto/Identity";
 import { Sha256 } from "~/crypto/sha256";
-import type { BlendOperation } from "./Operation";
+import type { Operation } from "./Operation";
 import { OperationEncoder } from "./serializeOperations";
 
 export class Patch {
   private constructor(
-    readonly operations: readonly BlendOperation[],
+    readonly operations: readonly Operation[],
     readonly publicKeyHex: string,
     readonly hash: string,
     readonly signatureHex: string,
   ) { }
 
-  static async create(operations: readonly BlendOperation[], identity: Identity): Promise<Patch> {
+  static async create(operations: readonly Operation[], identity: Identity): Promise<Patch> {
     const operationBytes = OperationEncoder.operations(operations);
     const hashInput = Bytes.concat([operationBytes, identity.publicKeyBytes]);
     const hashBytes = await Sha256.digest(hashInput);

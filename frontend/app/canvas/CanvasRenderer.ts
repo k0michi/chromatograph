@@ -10,7 +10,7 @@ import { ShaderStage } from "~/webgl/ShaderStage";
 import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
 import { CHUNK_VIEW_PROJECTION } from "./chunkSpace";
-import type { BlendOperation } from "./Operation";
+import type { BlendOperation, UndoOperation } from "./Operation";
 import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
@@ -59,6 +59,7 @@ export interface UncommittedOverlay {
 interface HistoryRecord {
   patch: Patch;
   entries: { tile: Tile; entry: TileOperationEntry }[];
+  toggleHeadHash: string;
 }
 
 export class CanvasRenderer {
@@ -161,15 +162,20 @@ export class CanvasRenderer {
     for (const operation of operations) {
       const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
       const entry = tile.addOperation(patch.hash, operation);
-      if (!tile.snapshot) {
-        tile.snapshot = this.createEmptySnapshot();
-      }
-      this.paintOntoSnapshot(tile.snapshot, operation.bindGroup, operation.opacity);
       entries.push({ tile, entry });
     }
 
-    this.undoStack.push({ patch, entries });
+    for (const { tile } of entries) {
+      this.rebuildSnapshot(tile);
+    }
+
+    this.undoStack.push({ patch, entries, toggleHeadHash: patch.hash });
     this.redoStack.length = 0;
+  }
+
+  getChunkParents(x: number, y: number): string[] {
+    const entries = this.tiles.get(x, y)?.operationEntries;
+    return entries?.length ? [entries[entries.length - 1].patchHash] : [];
   }
 
   get canUndo(): boolean {
@@ -180,14 +186,21 @@ export class CanvasRenderer {
     return this.redoStack.length > 0;
   }
 
-  undo(): void {
+  async undo(): Promise<void> {
     const record = this.undoStack.pop();
     if (!record) {
       return;
     }
+    const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
+      type: "undo",
+      chunk: { x: tile.x, y: tile.y },
+      parents: [record.toggleHeadHash],
+    }));
+    const patch = await Patch.create(operations, await this.identity);
+    record.toggleHeadHash = patch.hash;
     const tiles = new Set<Tile>();
-    for (const { tile, entry } of record.entries) {
-      entry.active = false;
+    for (const { tile } of record.entries) {
+      tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
       tiles.add(tile);
     }
     for (const tile of tiles) {
@@ -196,14 +209,21 @@ export class CanvasRenderer {
     this.redoStack.push(record);
   }
 
-  redo(): void {
+  async redo(): Promise<void> {
     const record = this.redoStack.pop();
     if (!record) {
       return;
     }
+    const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
+      type: "undo",
+      chunk: { x: tile.x, y: tile.y },
+      parents: [record.toggleHeadHash],
+    }));
+    const patch = await Patch.create(operations, await this.identity);
+    record.toggleHeadHash = patch.hash;
     const tiles = new Set<Tile>();
-    for (const { tile, entry } of record.entries) {
-      entry.active = true;
+    for (const { tile } of record.entries) {
+      tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
       tiles.add(tile);
     }
     for (const tile of tiles) {
@@ -214,10 +234,8 @@ export class CanvasRenderer {
 
   private rebuildSnapshot(tile: Tile): void {
     const rebuilt = this.createEmptySnapshot();
-    for (const entry of tile.operationEntries) {
-      if (entry.active) {
-        this.paintOntoSnapshot(rebuilt, entry.op.bindGroup, entry.op.opacity);
-      }
+    for (const entry of tile.resolveActiveBlendEntries()) {
+      this.paintOntoSnapshot(rebuilt, entry.op.bindGroup, entry.op.opacity);
     }
     if (tile.snapshot) {
       this.disposeSnapshot(tile.snapshot);
@@ -285,7 +303,7 @@ export class CanvasRenderer {
     const disposedTextures = new Set<Texture>();
     for (const tile of this.tiles) {
       for (const entry of tile.operationEntries) {
-        if (!disposedTextures.has(entry.op.texture)) {
+        if (entry.op.type === "blend" && !disposedTextures.has(entry.op.texture)) {
           disposedTextures.add(entry.op.texture);
           entry.op.texture.dispose();
         }

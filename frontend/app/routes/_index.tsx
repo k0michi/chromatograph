@@ -72,15 +72,15 @@ export default function Index() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) {
-          renderer.redo();
+          void renderer.redo();
         } else {
-          renderer.undo();
+          void renderer.undo();
         }
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
         event.preventDefault();
-        renderer.redo();
+        void renderer.redo();
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -214,10 +214,10 @@ export default function Index() {
           />
         </label>
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={() => rendererRef.current?.undo()}>
+          <button type="button" onClick={() => void rendererRef.current?.undo()}>
             Undo
           </button>
-          <button type="button" onClick={() => rendererRef.current?.redo()}>
+          <button type="button" onClick={() => void rendererRef.current?.redo()}>
             Redo
           </button>
         </div>

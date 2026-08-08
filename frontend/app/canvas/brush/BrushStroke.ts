@@ -68,7 +68,7 @@ export class BrushStroke {
     const operations: BlendOperation[] = touched.map((accumulation) => ({
       type: "blend",
       chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
-      parents: [],
+      parents: this.renderer.getChunkParents(accumulation.chunkX, accumulation.chunkY),
       compositeOp: CompositeOp.SourceOver,
       blendMode: BlendMode.Normal,
       opacity: 1,
