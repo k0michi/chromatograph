@@ -33,11 +33,18 @@ export class Tile {
 
   resolveActiveBlendEntries(): readonly (TileOperationEntry & { readonly op: BlendOperation })[] {
     const byHash = new Map(this.operationEntries.map((entry) => [entry.patchHash, entry]));
-    const activeHashes = new Set(
-      this.operationEntries
-        .filter((entry) => entry.op.type === "blend")
-        .map((entry) => entry.patchHash),
-    );
+    const childrenByHash = new Map<string, TileOperationEntry[]>();
+    const parentCountByHash = new Map<string, number>();
+
+    for (const entry of this.operationEntries) {
+      const parents = entry.op.parents.filter((parent) => byHash.has(parent));
+      parentCountByHash.set(entry.patchHash, parents.length);
+      for (const parent of parents) {
+        const children = childrenByHash.get(parent) ?? [];
+        children.push(entry);
+        childrenByHash.set(parent, children);
+      }
+    }
 
     interface UndoSubject {
       readonly blendHashes: readonly string[];
@@ -74,10 +81,7 @@ export class Tile {
       return { blendHashes: first.blendHashes, visible: !first.visible };
     };
 
-    const undoEntries = this.operationEntries
-      .filter((entry) => entry.op.type === "undo")
-      .sort((a, b) => a.patchHash.localeCompare(b.patchHash));
-    for (const undo of undoEntries) {
+    for (const undo of this.operationEntries.filter((entry) => entry.op.type === "undo")) {
       const parentSubjects = undo.op.parents
         .map((parent) => resolveUndoSubject(parent))
         .filter((subject): subject is UndoSubject => subject !== null);
@@ -90,18 +94,56 @@ export class Tile {
           throw new Error(`Undo ${undo.patchHash} has parents that do not represent the same Blend state.`);
         }
       }
-      for (const targetHash of first.blendHashes) {
-        if (activeHashes.has(targetHash)) {
-          activeHashes.delete(targetHash);
-        } else {
-          activeHashes.add(targetHash);
-        }
-      }
     }
 
-    return this.operationEntries
-      .filter((entry): entry is TileOperationEntry & { readonly op: BlendOperation } =>
-        entry.op.type === "blend" && activeHashes.has(entry.patchHash))
+    const isActive = (blendHash: string): boolean => {
+      interface UndoChain {
+        readonly maximumHash: string;
+        readonly length: number;
+      }
+
+      const chainsFrom = (hash: string, maximumHash: string, length: number, visiting: ReadonlySet<string>): UndoChain[] => {
+        if (visiting.has(hash)) {
+          throw new Error(`A cycle was found in the Patch DAG at ${hash}.`);
+        }
+        const undoChildren = (childrenByHash.get(hash) ?? []).filter((entry) => entry.op.type === "undo");
+        if (undoChildren.length === 0) {
+          return [{ maximumHash, length }];
+        }
+        const nextVisiting = new Set(visiting).add(hash);
+        return undoChildren.flatMap((entry) =>
+          chainsFrom(entry.patchHash, maximumHash > entry.patchHash ? maximumHash : entry.patchHash, length + 1, nextVisiting));
+      };
+
+      const chains = chainsFrom(blendHash, "", 0, new Set());
+      const winner = chains.reduce((current, candidate) =>
+        candidate.maximumHash > current.maximumHash ? candidate : current);
+      return winner.length % 2 === 0;
+    };
+
+    const roots = this.operationEntries
+      .filter((entry) => parentCountByHash.get(entry.patchHash) === 0)
       .sort((a, b) => a.patchHash.localeCompare(b.patchHash));
+    const ordered: TileOperationEntry[] = [];
+    const visited = new Set<string>();
+    const visit = (entry: TileOperationEntry): void => {
+      if (visited.has(entry.patchHash)) {
+        return;
+      }
+      visited.add(entry.patchHash);
+      ordered.push(entry);
+      for (const child of (childrenByHash.get(entry.patchHash) ?? []).sort((a, b) => a.patchHash.localeCompare(b.patchHash))) {
+        visit(child);
+      }
+    };
+    for (const root of roots) {
+      visit(root);
+    }
+    if (visited.size !== this.operationEntries.length) {
+      throw new Error("A cycle was found in the Patch DAG.");
+    }
+
+    return ordered.filter((entry): entry is TileOperationEntry & { readonly op: BlendOperation } =>
+      entry.op.type === "blend" && isActive(entry.patchHash));
   }
 }
