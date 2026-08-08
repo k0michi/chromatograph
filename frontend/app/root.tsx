@@ -6,6 +6,7 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
+import "modern-normalize";
 
 import type { Route } from "./+types/root";
 
