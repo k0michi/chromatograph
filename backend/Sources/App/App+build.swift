@@ -1,4 +1,5 @@
 import Configuration
+import Foundation
 import Hummingbird
 import HummingbirdWebSocket
 import Logging
@@ -6,6 +7,7 @@ import Logging
 // Request context used by application
 typealias AppRequestContext = BasicRequestContext
 typealias AppWSRequestContext = BasicWebSocketRequestContext
+private let maximumPatchPacketSize = 64 * 1024 * 1024
 
 ///  Build application
 /// - Parameter reader: configuration reader
@@ -16,10 +18,13 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
         return logger
     }()
     let router = try buildRouter()
-    let wsRouter = try buildWebSocketRouter()
+    let wsRouter = try buildWebSocketRouter(broadcaster: PatchBroadcaster())
     let app = Application(
         router: router,
-        server: .http1WebSocketUpgrade(webSocketRouter: wsRouter),
+        server: .http1WebSocketUpgrade(
+            webSocketRouter: wsRouter,
+            configuration: .init(ws: .init(maxFrameSize: maximumPatchPacketSize))
+        ),
         configuration: ApplicationConfiguration(reader: reader.scoped(to: "http")),
         logger: logger
     )
@@ -42,27 +47,36 @@ func buildRouter() throws -> Router<AppRequestContext> {
 }
 
 /// Build websocket router
-func buildWebSocketRouter() throws -> Router<AppWSRequestContext> {
+func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSRequestContext> {
     let router = Router(context: AppWSRequestContext.self)
     // Add middleware
     router.addMiddleware {
         // logging middleware
         LogRequestsMiddleware(.info)
     }
-    // Add default endpoint
-    router.ws("/ws") { request, context in
+    router.ws("/ws") { _, _ in
         return .upgrade()
-    } onUpgrade: { inbound, outbound, context in
-        // Read inbound message
-        for try await message in inbound.messages(maxSize: 1_000_000) {
-            // write type and size of message
-            switch message {
-            case .binary(let buffer):
-                try await outbound.write(.text("Binary message, length: \(buffer.readableBytes)"))
-            case .text(let string):
-                try await outbound.write(.text("Text message, length: \(string.count)"))
+    } onUpgrade: { inbound, outbound, _ in
+        let connectionID = await broadcaster.add(outbound)
+        do {
+            for try await message in inbound.messages(maxSize: maximumPatchPacketSize) {
+                switch message {
+                case .binary(let buffer):
+                    do {
+                        _ = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
+                        await broadcaster.broadcast(buffer)
+                    } catch {
+                        try await outbound.write(.text("Invalid patch packet"))
+                    }
+                case .text:
+                    try await outbound.write(.text("Patch packets must be binary"))
+                }
             }
+        } catch {
+            await broadcaster.remove(connectionID)
+            throw error
         }
+        await broadcaster.remove(connectionID)
     }
     return router
 }

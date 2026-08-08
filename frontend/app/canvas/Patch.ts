@@ -20,4 +20,13 @@ export class Patch {
     const signatureBytes = await identity.sign(hashBytes);
     return new Patch(operations, identity.publicKeyHex, Hex.fromBytes(hashBytes), Hex.fromBytes(signatureBytes));
   }
+
+  static fromEncoded(
+    operations: readonly Operation[],
+    publicKeyHex: string,
+    hash: string,
+    signatureHex: string,
+  ): Patch {
+    return new Patch(operations, publicKeyHex, hash, signatureHex);
+  }
 }

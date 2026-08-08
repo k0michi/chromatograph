@@ -75,9 +75,13 @@ export class CanvasRenderer {
 
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
+  private readonly knownPatchHashes = new Set<string>();
   private readonly identity: Promise<Identity> = Identity.generate();
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    private readonly publishPatch?: (patch: Patch) => void,
+  ) {
     this.context = new Context(canvas);
     this.gl = this.context.gl;
     this.device = this.context.device;
@@ -159,6 +163,7 @@ export class CanvasRenderer {
 
   async commitPatch(operations: readonly BlendOperation[]): Promise<void> {
     const patch = await Patch.create(operations, await this.identity);
+    this.knownPatchHashes.add(patch.hash);
     const entries: HistoryRecord["entries"] = [];
 
     for (const operation of operations) {
@@ -173,6 +178,7 @@ export class CanvasRenderer {
 
     this.undoStack.push({ patch, entries, toggleHeadHash: patch.hash });
     this.redoStack.length = 0;
+    this.publishPatch?.(patch);
   }
 
   getChunkParents(x: number, y: number): string[] {
@@ -188,6 +194,33 @@ export class CanvasRenderer {
     return this.redoStack.length > 0;
   }
 
+  applyPatch(patch: Patch): boolean {
+    if (this.knownPatchHashes.has(patch.hash)) {
+      return false;
+    }
+
+    const chunks = new Set<string>();
+    for (const operation of patch.operations) {
+      const key = `${operation.chunk.x},${operation.chunk.y}`;
+      if (chunks.has(key)) {
+        throw new Error(`Patch ${patch.hash} contains multiple operations for chunk ${key}.`);
+      }
+      chunks.add(key);
+    }
+
+    this.knownPatchHashes.add(patch.hash);
+    const touchedTiles = new Set<Tile>();
+    for (const operation of patch.operations) {
+      const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
+      tile.addOperation(patch.hash, operation);
+      touchedTiles.add(tile);
+    }
+    for (const tile of touchedTiles) {
+      this.rebuildSnapshot(tile);
+    }
+    return true;
+  }
+
   async undo(): Promise<void> {
     const record = this.undoStack.pop();
     if (!record) {
@@ -199,6 +232,7 @@ export class CanvasRenderer {
       parents: [record.toggleHeadHash],
     }));
     const patch = await Patch.create(operations, await this.identity);
+    this.knownPatchHashes.add(patch.hash);
     record.toggleHeadHash = patch.hash;
     const tiles = new Set<Tile>();
     for (const { tile } of record.entries) {
@@ -209,6 +243,7 @@ export class CanvasRenderer {
       this.rebuildSnapshot(tile);
     }
     this.redoStack.push(record);
+    this.publishPatch?.(patch);
   }
 
   async redo(): Promise<void> {
@@ -222,6 +257,7 @@ export class CanvasRenderer {
       parents: [record.toggleHeadHash],
     }));
     const patch = await Patch.create(operations, await this.identity);
+    this.knownPatchHashes.add(patch.hash);
     record.toggleHeadHash = patch.hash;
     const tiles = new Set<Tile>();
     for (const { tile } of record.entries) {
@@ -232,6 +268,7 @@ export class CanvasRenderer {
       this.rebuildSnapshot(tile);
     }
     this.undoStack.push(record);
+    this.publishPatch?.(patch);
   }
 
   private rebuildSnapshot(tile: Tile): void {
