@@ -13,8 +13,6 @@ function operation(imageBytes: number[], parents: readonly string[] = []): Blend
     blendMode: BlendMode.Normal,
     opacity: 1,
     imageBytes: new Uint8Array(imageBytes),
-    texture: {} as BlendOperation["texture"],
-    bindGroup: {} as BlendOperation["bindGroup"],
   };
 }
 

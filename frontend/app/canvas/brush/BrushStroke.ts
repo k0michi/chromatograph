@@ -1,19 +1,14 @@
 import { mat3 } from "gl-matrix";
-import type { BindGroup } from "~/webgl/BindGroup";
-import type { Framebuffer } from "~/webgl/Framebuffer";
-import type { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
 import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
 import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
-import { TILE_SIZE } from "../Tile";
+import { TILE_SIZE, type TileSnapshot } from "../Tile";
 import type { Brush } from "./Brush";
 
 interface ChunkAccumulation {
   chunkX: number;
   chunkY: number;
-  texture: Texture;
-  framebuffer: Framebuffer;
-  bindGroup: BindGroup;
+  snapshot: TileSnapshot;
 }
 
 function chunkKey(chunkX: number, chunkY: number): string {
@@ -72,9 +67,7 @@ export class BrushStroke {
       compositeOp: CompositeOp.SourceOver,
       blendMode: BlendMode.Normal,
       opacity: 1,
-      imageBytes: accumulation.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE),
-      texture: accumulation.texture,
-      bindGroup: accumulation.bindGroup,
+      imageBytes: accumulation.snapshot.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE),
     }));
 
     try {
@@ -82,10 +75,10 @@ export class BrushStroke {
     } finally {
       for (const accumulation of touched) {
         const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
-        if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.bindGroup) {
+        if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.snapshot.bindGroup) {
           this.renderer.uncommittedOverlays.delete(key);
         }
-        accumulation.framebuffer.dispose();
+        this.renderer.disposeSnapshot(accumulation.snapshot);
       }
       this.touchedChunks.clear();
     }
@@ -109,7 +102,7 @@ export class BrushStroke {
         const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
 
         const pass = this.renderer.beginPass({
-          framebuffer: accumulation.framebuffer,
+          framebuffer: accumulation.snapshot.framebuffer,
           width: TILE_SIZE,
           height: TILE_SIZE,
         });
@@ -126,17 +119,10 @@ export class BrushStroke {
       return existing;
     }
 
-    const texture = this.renderer.device.createTexture({
-      source: { width: TILE_SIZE, height: TILE_SIZE, data: null },
-    });
-    const framebuffer = this.renderer.device.createFramebuffer({ colorAttachment: texture });
-    const bindGroup = this.renderer.createPatchBindGroup(texture);
-
-    this.renderer.beginPass({ framebuffer, width: TILE_SIZE, height: TILE_SIZE }, [0, 0, 0, 0]).end();
-
-    const accumulation: ChunkAccumulation = { chunkX, chunkY, texture, framebuffer, bindGroup };
+    const snapshot = this.renderer.createEmptySnapshot();
+    const accumulation: ChunkAccumulation = { chunkX, chunkY, snapshot };
     this.touchedChunks.set(key, accumulation);
-    this.renderer.uncommittedOverlays.set(key, { chunkX, chunkY, bindGroup });
+    this.renderer.uncommittedOverlays.set(key, { chunkX, chunkY, bindGroup: snapshot.bindGroup });
     return accumulation;
   }
 }

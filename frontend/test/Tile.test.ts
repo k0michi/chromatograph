@@ -11,8 +11,6 @@ function blend(parents: readonly string[] = []): BlendOperation {
     blendMode: BlendMode.Normal,
     opacity: 1,
     imageBytes: new Uint8Array(),
-    texture: {} as BlendOperation["texture"],
-    bindGroup: {} as BlendOperation["bindGroup"],
   };
 }
 

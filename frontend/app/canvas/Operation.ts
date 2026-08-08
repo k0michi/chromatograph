@@ -1,6 +1,3 @@
-import type { BindGroup } from "~/webgl/BindGroup";
-import type { Texture } from "~/webgl/Texture";
-
 export interface TileChunk {
   readonly x: number;
   readonly y: number;
@@ -28,8 +25,6 @@ export interface BlendOperation {
   readonly blendMode: BlendMode;
   readonly opacity: number;
   readonly imageBytes: Uint8Array<ArrayBuffer>;
-  readonly texture: Texture;
-  readonly bindGroup: BindGroup;
 }
 
 export interface UndoOperation {

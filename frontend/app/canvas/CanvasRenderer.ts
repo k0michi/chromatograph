@@ -142,7 +142,18 @@ export class CanvasRenderer {
     pass.end();
   }
 
-  private createEmptySnapshot(): TileSnapshot {
+  private paintOperationOntoSnapshot(snapshot: TileSnapshot, operation: BlendOperation): void {
+    const texture = this.device.createTexture({
+      source: { width: TILE_SIZE, height: TILE_SIZE, data: operation.imageBytes },
+    });
+    try {
+      this.paintOntoSnapshot(snapshot, this.createPatchBindGroup(texture), operation.opacity);
+    } finally {
+      texture.dispose();
+    }
+  }
+
+  createEmptySnapshot(): TileSnapshot {
     const texture = this.device.createTexture({ source: { width: TILE_SIZE, height: TILE_SIZE, data: null } });
     const framebuffer = this.device.createFramebuffer({ colorAttachment: texture });
     const bindGroup = this.createPatchBindGroup(texture);
@@ -150,7 +161,7 @@ export class CanvasRenderer {
     return { texture, bindGroup, framebuffer };
   }
 
-  private disposeSnapshot(snapshot: TileSnapshot): void {
+  disposeSnapshot(snapshot: TileSnapshot): void {
     snapshot.texture.dispose();
     snapshot.framebuffer.dispose();
   }
@@ -235,7 +246,7 @@ export class CanvasRenderer {
   private rebuildSnapshot(tile: Tile): void {
     const rebuilt = this.createEmptySnapshot();
     for (const entry of tile.resolveActiveBlendEntries()) {
-      this.paintOntoSnapshot(rebuilt, entry.op.bindGroup, entry.op.opacity);
+      this.paintOperationOntoSnapshot(rebuilt, entry.op);
     }
     if (tile.snapshot) {
       this.disposeSnapshot(tile.snapshot);
@@ -300,14 +311,7 @@ export class CanvasRenderer {
   dispose(): void {
     this.quad.dispose();
     this.pipeline.dispose();
-    const disposedTextures = new Set<Texture>();
     for (const tile of this.tiles) {
-      for (const entry of tile.operationEntries) {
-        if (entry.op.type === "blend" && !disposedTextures.has(entry.op.texture)) {
-          disposedTextures.add(entry.op.texture);
-          entry.op.texture.dispose();
-        }
-      }
       if (tile.snapshot) {
         this.disposeSnapshot(tile.snapshot);
       }
