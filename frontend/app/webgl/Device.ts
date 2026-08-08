@@ -5,13 +5,8 @@ import { RenderPipeline, type RenderPipelineDescriptor } from "./RenderPipeline"
 import { Shader, type ShaderDescriptor } from "./Shader";
 import { Texture, type TextureDescriptor } from "./Texture";
 
-/**
- * Owns resource creation, à la GPUDevice: every Buffer/Texture/Shader/RenderPipeline/
- * BindGroup(Layout) is created through a Device rather than constructed directly, so
- * there's a single, consistent entry point for initialization.
- */
 export class Device {
-  constructor(private readonly gl: WebGL2RenderingContext) {}
+  constructor(private readonly gl: WebGL2RenderingContext) { }
 
   createBuffer(descriptor: BufferDescriptor): Buffer {
     return new Buffer(this.gl, descriptor);

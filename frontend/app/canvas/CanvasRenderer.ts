@@ -9,7 +9,6 @@ import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
-import { TILE_SIZE } from "./Tile";
 
 const VERTEX_SHADER = `#version 300 es
 layout(location = 0) in vec2 aPosition;
@@ -70,7 +69,7 @@ export class CanvasRenderer {
         vertexShader,
         fragmentShader,
         topology: "triangle-strip",
-        blend: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+        blend: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
         bindGroupLayout: this.bindGroupLayout,
         vertexBuffers: [
           {
@@ -115,22 +114,19 @@ export class CanvasRenderer {
     const bounds = this.camera.visibleWorldBounds();
 
     for (const tile of this.tiles) {
-      const tileMinX = tile.x * TILE_SIZE;
-      const tileMinY = tile.y * TILE_SIZE;
-      const isVisible =
-        tileMinX < bounds.maxX &&
-        tileMinX + TILE_SIZE > bounds.minX &&
-        tileMinY < bounds.maxY &&
-        tileMinY + TILE_SIZE > bounds.minY;
-      if (!isVisible) {
-        continue;
-      }
-
-      const model = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, tileMinX, tileMinY, 1);
-      const mvp = mat3.multiply(mat3.create(), viewProjection, model);
-      pass.setUniformMatrix3("uMvp", mvp);
-
       for (const patch of tile.patches) {
+        const isVisible =
+          patch.x < bounds.maxX &&
+          patch.x + patch.size > bounds.minX &&
+          patch.y < bounds.maxY &&
+          patch.y + patch.size > bounds.minY;
+        if (!isVisible) {
+          continue;
+        }
+
+        const model = mat3.fromValues(patch.size, 0, 0, 0, patch.size, 0, patch.x, patch.y, 1);
+        const mvp = mat3.multiply(mat3.create(), viewProjection, model);
+        pass.setUniformMatrix3("uMvp", mvp);
         pass.setBindGroup(patch.bindGroup);
         pass.setUniformFloat("uOpacity", patch.opacity);
         pass.draw(this.quad.vertexCount);
@@ -143,9 +139,13 @@ export class CanvasRenderer {
   dispose(): void {
     this.quad.dispose();
     this.pipeline.dispose();
+    const disposedTextures = new Set<Texture>();
     for (const tile of this.tiles) {
       for (const patch of tile.patches) {
-        patch.texture.dispose();
+        if (!disposedTextures.has(patch.texture)) {
+          disposedTextures.add(patch.texture);
+          patch.texture.dispose();
+        }
       }
     }
   }

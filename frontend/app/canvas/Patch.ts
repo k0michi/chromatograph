@@ -5,6 +5,9 @@ export class Patch {
   constructor(
     readonly texture: Texture,
     readonly bindGroup: BindGroup,
-    readonly opacity: number = 1,
+    readonly opacity: number,
+    readonly x: number,
+    readonly y: number,
+    readonly size: number,
   ) { }
 }

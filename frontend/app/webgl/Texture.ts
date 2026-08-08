@@ -4,15 +4,25 @@ import { resolveFilterMode, type FilterMode } from "./FilterMode";
 import type { MipmapFilterMode } from "./MipmapFilterMode";
 import { resolveTextureFormat, type TextureFormat } from "./TextureFormat";
 
+export interface RawImageSource {
+  width: number;
+  height: number;
+  data: ArrayBufferView;
+}
+
 export interface TextureDescriptor {
   target?: GLenum;
-  source: TexImageSource;
+  source: TexImageSource | RawImageSource;
   format?: TextureFormat;
   wrapS?: AddressMode;
   wrapT?: AddressMode;
   minFilter?: FilterMode;
   magFilter?: FilterMode;
   mipmapFilter?: MipmapFilterMode;
+}
+
+function isRawImageSource(source: TexImageSource | RawImageSource): source is RawImageSource {
+  return typeof source === "object" && source !== null && "data" in source;
 }
 
 function resolveMinFilter(
@@ -47,14 +57,28 @@ export class Texture implements Disposable {
     const resolvedFormat = resolveTextureFormat(gl, descriptor.format ?? "rgba8unorm");
 
     gl.bindTexture(this.target, texture);
-    gl.texImage2D(
-      this.target,
-      0,
-      resolvedFormat.internalFormat,
-      resolvedFormat.format,
-      resolvedFormat.type,
-      descriptor.source,
-    );
+    if (isRawImageSource(descriptor.source)) {
+      gl.texImage2D(
+        this.target,
+        0,
+        resolvedFormat.internalFormat,
+        descriptor.source.width,
+        descriptor.source.height,
+        0,
+        resolvedFormat.format,
+        resolvedFormat.type,
+        descriptor.source.data,
+      );
+    } else {
+      gl.texImage2D(
+        this.target,
+        0,
+        resolvedFormat.internalFormat,
+        resolvedFormat.format,
+        resolvedFormat.type,
+        descriptor.source,
+      );
+    }
     gl.texParameteri(this.target, gl.TEXTURE_WRAP_S, resolveAddressMode(gl, descriptor.wrapS ?? "clamp-to-edge"));
     gl.texParameteri(this.target, gl.TEXTURE_WRAP_T, resolveAddressMode(gl, descriptor.wrapT ?? "clamp-to-edge"));
     gl.texParameteri(
