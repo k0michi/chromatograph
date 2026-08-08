@@ -75,8 +75,8 @@ export class CanvasRenderer {
           {
             arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
             attributes: [
-              { shaderLocation: 0, size: 2, type: gl.FLOAT, offset: 0 },
-              { shaderLocation: 1, size: 2, type: gl.FLOAT, offset: 2 * Float32Array.BYTES_PER_ELEMENT },
+              { shaderLocation: 0, format: "float32x2", offset: 0 },
+              { shaderLocation: 1, format: "float32x2", offset: 2 * Float32Array.BYTES_PER_ELEMENT },
             ],
           },
         ],

@@ -29,14 +29,24 @@ export class RenderPassEncoder {
     buffer.bind(gl.ARRAY_BUFFER);
     for (const attribute of layout.attributes) {
       gl.enableVertexAttribArray(attribute.shaderLocation);
-      gl.vertexAttribPointer(
-        attribute.shaderLocation,
-        attribute.size,
-        attribute.type,
-        false,
-        layout.arrayStride,
-        attribute.offset,
-      );
+      if (attribute.integer) {
+        gl.vertexAttribIPointer(
+          attribute.shaderLocation,
+          attribute.size,
+          attribute.glType,
+          layout.arrayStride,
+          attribute.offset,
+        );
+      } else {
+        gl.vertexAttribPointer(
+          attribute.shaderLocation,
+          attribute.size,
+          attribute.glType,
+          attribute.normalized,
+          layout.arrayStride,
+          attribute.offset,
+        );
+      }
     }
   }
 

@@ -2,6 +2,7 @@ import type { mat3 } from "gl-matrix";
 import type { BindGroupLayout } from "./BindGroupLayout";
 import type { Disposable } from "./Disposable";
 import type { Shader } from "./Shader";
+import { resolveVertexFormat, type VertexFormat } from "./VertexFormat";
 
 export interface BlendState {
   srcFactor: GLenum;
@@ -10,8 +11,7 @@ export interface BlendState {
 
 export interface VertexAttributeDescriptor {
   shaderLocation: number;
-  size: number;
-  type: GLenum;
+  format: VertexFormat;
   offset: number;
 }
 
@@ -29,13 +29,30 @@ export interface RenderPipelineDescriptor {
   vertexBuffers: VertexBufferLayoutDescriptor[];
 }
 
+/** @internal */
+interface ResolvedVertexAttribute {
+  shaderLocation: number;
+  offset: number;
+  size: number;
+  glType: GLenum;
+  normalized: boolean;
+  integer: boolean;
+}
+
+/** @internal */
+interface ResolvedVertexBufferLayout {
+  arrayStride: number;
+  attributes: ResolvedVertexAttribute[];
+}
+
 export class RenderPipeline implements Disposable {
   private readonly handle: WebGLProgram;
   private readonly uniformLocations = new Map<string, WebGLUniformLocation>();
   readonly topology: GLenum;
   readonly blend?: BlendState;
   readonly bindGroupLayout: BindGroupLayout;
-  readonly vertexBuffers: readonly VertexBufferLayoutDescriptor[];
+  /** @internal */
+  readonly vertexBuffers: readonly ResolvedVertexBufferLayout[];
 
   constructor(
     private readonly gl: WebGL2RenderingContext,
@@ -60,7 +77,20 @@ export class RenderPipeline implements Disposable {
     this.topology = descriptor.topology;
     this.blend = descriptor.blend;
     this.bindGroupLayout = descriptor.bindGroupLayout;
-    this.vertexBuffers = descriptor.vertexBuffers;
+    this.vertexBuffers = descriptor.vertexBuffers.map((layout) => ({
+      arrayStride: layout.arrayStride,
+      attributes: layout.attributes.map((attribute) => {
+        const resolved = resolveVertexFormat(gl, attribute.format);
+        return {
+          shaderLocation: attribute.shaderLocation,
+          offset: attribute.offset,
+          size: resolved.size,
+          glType: resolved.glType,
+          normalized: resolved.normalized,
+          integer: resolved.integer,
+        };
+      }),
+    }));
   }
 
   /** @internal */
