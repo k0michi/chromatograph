@@ -1,9 +1,9 @@
 import { mat3 } from "gl-matrix";
-import { BindGroup } from "~/webgl/BindGroup";
-import { BindGroupLayout } from "~/webgl/BindGroupLayout";
+import type { BindGroup } from "~/webgl/BindGroup";
+import type { BindGroupLayout } from "~/webgl/BindGroupLayout";
 import { Context } from "~/webgl/Context";
-import { RenderPipeline } from "~/webgl/RenderPipeline";
-import { Shader } from "~/webgl/Shader";
+import type { Device } from "~/webgl/Device";
+import type { RenderPipeline } from "~/webgl/RenderPipeline";
 import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
 import { QuadGeometry } from "./QuadGeometry";
@@ -48,22 +48,24 @@ export class CanvasRenderer {
   private readonly quad: QuadGeometry;
   private readonly bindGroupLayout: BindGroupLayout;
   readonly gl: WebGL2RenderingContext;
+  readonly device: Device;
   readonly camera = new Camera2D();
   readonly tiles = new TileStore();
 
   constructor(canvas: HTMLCanvasElement) {
     this.context = new Context(canvas);
     this.gl = this.context.gl;
-    const { gl } = this;
+    this.device = this.context.device;
+    const { gl, device } = this;
 
-    this.bindGroupLayout = new BindGroupLayout({
+    this.bindGroupLayout = device.createBindGroupLayout({
       entries: [{ binding: IMAGE_BINDING, type: "texture" }],
     });
 
-    const vertexShader = new Shader(gl, { type: gl.VERTEX_SHADER, source: VERTEX_SHADER });
-    const fragmentShader = new Shader(gl, { type: gl.FRAGMENT_SHADER, source: FRAGMENT_SHADER });
+    const vertexShader = device.createShader({ type: gl.VERTEX_SHADER, source: VERTEX_SHADER });
+    const fragmentShader = device.createShader({ type: gl.FRAGMENT_SHADER, source: FRAGMENT_SHADER });
     try {
-      this.pipeline = new RenderPipeline(gl, {
+      this.pipeline = device.createRenderPipeline({
         vertexShader,
         fragmentShader,
         topology: gl.TRIANGLE_STRIP,
@@ -84,11 +86,11 @@ export class CanvasRenderer {
       fragmentShader.dispose();
     }
 
-    this.quad = new QuadGeometry(gl);
+    this.quad = new QuadGeometry(device, gl);
   }
 
   createPatchBindGroup(texture: Texture): BindGroup {
-    return new BindGroup({
+    return this.device.createBindGroup({
       layout: this.bindGroupLayout,
       entries: [{ binding: IMAGE_BINDING, texture }],
     });

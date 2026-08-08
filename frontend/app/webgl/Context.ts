@@ -1,3 +1,4 @@
+import { Device } from "./Device";
 import { RenderPassEncoder } from "./RenderPassEncoder";
 
 export interface ContextDescriptor {
@@ -12,6 +13,7 @@ export interface RenderPassDescriptor {
 export class Context {
   readonly canvas: HTMLCanvasElement;
   readonly gl: WebGL2RenderingContext;
+  readonly device: Device;
 
   constructor(canvas: HTMLCanvasElement, descriptor: ContextDescriptor = {}) {
     const gl = canvas.getContext("webgl2", {
@@ -23,6 +25,7 @@ export class Context {
     }
     this.canvas = canvas;
     this.gl = gl;
+    this.device = new Device(gl);
   }
 
   resize(): boolean {

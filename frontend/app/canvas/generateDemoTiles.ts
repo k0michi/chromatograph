@@ -1,4 +1,3 @@
-import { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "./CanvasRenderer";
 import { Patch } from "./Patch";
 import { TILE_SIZE } from "./Tile";
@@ -47,7 +46,7 @@ export function generateDemoTiles(renderer: CanvasRenderer): void {
     const tile = renderer.tiles.getOrCreate(spec.x, spec.y);
     for (const patchSpec of spec.patches) {
       const image = renderPatchImage(patchSpec.color);
-      const texture = new Texture(renderer.gl, { source: image });
+      const texture = renderer.device.createTexture({ source: image });
       const bindGroup = renderer.createPatchBindGroup(texture);
       tile.addPatch(new Patch(texture, bindGroup, patchSpec.opacity));
     }
