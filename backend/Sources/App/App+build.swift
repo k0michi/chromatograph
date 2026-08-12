@@ -76,6 +76,7 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
                 case .binary(let buffer):
                     do {
                         let patch = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
+                        try PatchValidator.validate(patch)
                         try validatePatchImages(patch)
                         await broadcaster.accept(patch, packet: buffer)
                     } catch {

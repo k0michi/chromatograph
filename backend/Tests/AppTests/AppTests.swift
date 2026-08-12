@@ -1,4 +1,5 @@
 import Configuration
+import Crypto
 import Foundation
 import Hummingbird
 import HummingbirdTesting
@@ -58,7 +59,7 @@ struct AppTests {
 
     @Test
     func wsAcceptsPatchWithValidRGBA8PNG() async throws {
-        let largePatch = testPatch(operations: [
+        let largePatch = try testPatch(operations: [
             .blend(BlendOperation(
                 chunk: TileChunk(x: 0, y: 0),
                 parents: [],
@@ -85,7 +86,7 @@ struct AppTests {
 
     @Test
     func wsRejectsBlendWithInvalidPNG() async throws {
-        let patch = testPatch(operations: [
+        let patch = try testPatch(operations: [
             .blend(BlendOperation(
                 chunk: TileChunk(x: 0, y: 0),
                 parents: [],
@@ -143,11 +144,9 @@ struct AppTests {
     @Test
     func wsReplaysCommittedPatchesToNewConnectionsInOrder() async throws {
         let first = ByteBuffer(bytes: try PatchPacketCodec.encode(testPatch(
-            hashByte: "21",
             operations: [.undo(UndoOperation(chunk: TileChunk(x: 1, y: 1), parents: []))]
         )))
         let second = ByteBuffer(bytes: try PatchPacketCodec.encode(testPatch(
-            hashByte: "22",
             operations: [.undo(UndoOperation(chunk: TileChunk(x: 2, y: 2), parents: []))]
         )))
         let historyReady = AsyncGate()
@@ -206,15 +205,25 @@ private func testPNG() throws -> Data {
 }
 
 private func testPatch(
-    hashByte: String = "22",
     operations: [ChromatographBackend.Operation] = []
-) -> Patch {
-    Patch(
-        operations: operations,
-        publicKeyHex: String(repeating: "11", count: 32),
-        hash: String(repeating: hashByte, count: 32),
-        signatureHex: String(repeating: "33", count: 64)
+) throws -> Patch {
+    let privateKey = try Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(repeating: 0x42, count: 32)
     )
+    let publicKey = privateKey.publicKey.rawRepresentation
+    let operationBytes = try OperationPacketCodec.encode(operations)
+    let hash = Data(SHA256.hash(data: operationBytes + publicKey))
+    let signature = try privateKey.signature(for: hash)
+    return Patch(
+        operations: operations,
+        publicKeyHex: publicKey.hexString,
+        hash: hash.hexString,
+        signatureHex: signature.hexString
+    )
+}
+
+private extension Data {
+    var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }
 
 private actor AsyncGate {

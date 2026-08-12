@@ -17,6 +17,7 @@ let package = Package(
             url: "https://github.com/apple/swift-configuration.git", from: "1.0.0",
             traits: [.defaults, "CommandLineArguments"]),
         .package(url: "https://github.com/tayloraswift/swift-png.git", from: "4.5.1"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -26,6 +27,7 @@ let package = Package(
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "PNG", package: "swift-png"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Sources/App"
         ),
@@ -36,6 +38,7 @@ let package = Package(
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "HummingbirdWSTesting", package: "hummingbird-websocket"),
                 .product(name: "PNG", package: "swift-png"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Tests/AppTests"
         ),
