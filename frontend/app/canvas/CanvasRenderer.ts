@@ -14,6 +14,7 @@ import {
   CANVAS_VERTEX_SHADER,
   SNAPSHOT_COPY_FRAGMENT_SHADER,
   STRAIGHT_COMPOSITE_FRAGMENT_SHADER,
+  TILE_GRID_FRAGMENT_SHADER,
 } from "./CanvasShaders";
 import { CHUNK_VIEW_PROJECTION } from "./chunkSpace";
 import type { BlendOperation, UndoOperation } from "./Operation";
@@ -27,6 +28,7 @@ const IMAGE_BINDING = 0;
 const DESTINATION_BINDING = 1;
 const SNAPSHOT_MODEL = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, 0, 0, 1);
 const SNAPSHOT_MVP = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, SNAPSHOT_MODEL);
+const FULLSCREEN_MVP = mat3.fromValues(2, 0, 0, 0, 2, 0, -1, -1, 1);
 
 export interface UncommittedOverlay {
   chunkX: number;
@@ -45,6 +47,7 @@ export class CanvasRenderer {
   private readonly pipeline: RenderPipeline;
   private readonly copyPipeline: RenderPipeline;
   private readonly straightCompositePipeline: RenderPipeline;
+  private readonly gridPipeline: RenderPipeline;
   private readonly quad: QuadGeometry;
   private readonly bindGroupLayout: BindGroupLayout;
   private readonly compositeBindGroupLayout: BindGroupLayout;
@@ -53,6 +56,7 @@ export class CanvasRenderer {
   readonly camera = new Camera2D();
   readonly tiles = new TileStore();
   readonly uncommittedOverlays = new Map<string, UncommittedOverlay>();
+  showGrid = false;
 
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
@@ -88,6 +92,7 @@ export class CanvasRenderer {
       stage: ShaderStage.FRAGMENT,
       source: STRAIGHT_COMPOSITE_FRAGMENT_SHADER,
     });
+    using gridFragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: TILE_GRID_FRAGMENT_SHADER });
     const vertexBuffers = [
       {
         arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
@@ -117,6 +122,14 @@ export class CanvasRenderer {
       fragmentShader: compositeFragmentShader,
       topology: "triangle-strip",
       bindGroupLayout: this.compositeBindGroupLayout,
+      vertexBuffers,
+    });
+    this.gridPipeline = device.createRenderPipeline({
+      vertexShader,
+      fragmentShader: gridFragmentShader,
+      topology: "triangle-strip",
+      blend: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+      bindGroupLayout: this.bindGroupLayout,
       vertexBuffers,
     });
 
@@ -386,6 +399,19 @@ export class CanvasRenderer {
     }
 
     pass.end();
+
+    if (this.showGrid) {
+      const gridPass = this.context.beginRenderPass();
+      gridPass.setPipeline(this.gridPipeline);
+      gridPass.setVertexBuffer(0, this.quad.buffer);
+      gridPass.setUniformMatrix3("uMvp", FULLSCREEN_MVP);
+      gridPass.setUniformFloat2("uViewportSize", this.context.canvas.width, this.context.canvas.height);
+      gridPass.setUniformFloat2("uCameraPosition", this.camera.x, this.camera.y);
+      gridPass.setUniformFloat("uZoom", this.camera.zoom * (window.devicePixelRatio || 1));
+      gridPass.setUniformFloat("uGridSize", TILE_SIZE);
+      gridPass.draw(this.quad.vertexCount);
+      gridPass.end();
+    }
   }
 
   private resize(): void {
@@ -399,6 +425,7 @@ export class CanvasRenderer {
     this.pipeline.dispose();
     this.copyPipeline.dispose();
     this.straightCompositePipeline.dispose();
+    this.gridPipeline.dispose();
     for (const tile of this.tiles) {
       if (tile.snapshot) {
         this.disposeSnapshot(tile.snapshot);

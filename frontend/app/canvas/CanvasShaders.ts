@@ -69,3 +69,23 @@ void main() {
   outColor = vec4(straight, outputAlpha);
 }
 `;
+
+/** Draws world-space tile boundaries as a screen-space overlay. */
+export const TILE_GRID_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform vec2 uViewportSize;
+uniform vec2 uCameraPosition;
+uniform float uZoom;
+uniform float uGridSize;
+out vec4 outColor;
+
+void main() {
+  vec2 screen = gl_FragCoord.xy - uViewportSize * 0.5;
+  vec2 world = uCameraPosition + vec2(screen.x, -screen.y) / uZoom;
+  vec2 cell = mod(world, uGridSize);
+  vec2 distanceToLine = min(cell, uGridSize - cell) * uZoom;
+  float alpha = 1.0 - smoothstep(0.5, 1.5, min(distanceToLine.x, distanceToLine.y));
+  outColor = vec4(vec3(0.25), alpha * 0.65);
+}
+`;

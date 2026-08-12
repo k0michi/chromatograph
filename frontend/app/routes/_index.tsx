@@ -21,6 +21,7 @@ export default function Index() {
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
+  const [showGrid, setShowGrid] = useState(false);
 
   useEffect(() => {
     const brush = brushRef.current;
@@ -32,6 +33,10 @@ export default function Index() {
     brush.settings.hardness = hardness;
     brush.settings.opacity = opacity;
   }, [color, size, hardness, opacity]);
+
+  useEffect(() => {
+    if (rendererRef.current) rendererRef.current.showGrid = showGrid;
+  }, [showGrid]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -251,6 +256,14 @@ export default function Index() {
             Redo
           </button>
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={showGrid}
+            onChange={(event) => setShowGrid(event.target.checked)}
+          />
+          Grid
+        </label>
         <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
