@@ -201,7 +201,10 @@ export class CanvasRenderer {
   }
 
   createEmptySnapshot(): TileSnapshot {
-    const texture = this.device.createTexture({ source: { width: TILE_SIZE, height: TILE_SIZE, data: null } });
+    const texture = this.device.createTexture({
+      source: { width: TILE_SIZE, height: TILE_SIZE, data: null },
+      magFilter: "nearest",
+    });
     const framebuffer = this.device.createFramebuffer({ colorAttachment: texture });
     const bindGroup = this.createPatchBindGroup(texture);
     this.beginPass({ framebuffer, width: TILE_SIZE, height: TILE_SIZE }, [0, 0, 0, 0]).end();
