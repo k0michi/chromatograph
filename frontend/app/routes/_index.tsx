@@ -105,6 +105,7 @@ export default function Index() {
     let panOrigin: { x: number; y: number } | null = null;
     let isPainting = false;
     let isSpaceHeld = false;
+    let activePointerId: number | null = null;
 
     const worldFromEvent = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -137,6 +138,10 @@ export default function Index() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !event.isPrimary || activePointerId !== null) {
+        return;
+      }
+      activePointerId = event.pointerId;
       canvas.setPointerCapture(event.pointerId);
       if (isSpaceHeld) {
         panOrigin = { x: event.clientX, y: event.clientY };
@@ -153,6 +158,7 @@ export default function Index() {
       const screenY = event.clientY - rect.top;
       cursorScreenRef.current = { x: screenX, y: screenY };
       cursorNeedsInspectionRef.current = true;
+      if (event.pointerId !== activePointerId) return;
       if (panOrigin) {
         const dx = event.clientX - panOrigin.x;
         const dy = event.clientY - panOrigin.y;
@@ -166,6 +172,8 @@ export default function Index() {
       }
     };
     const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId !== activePointerId) return;
+      activePointerId = null;
       panOrigin = null;
       isPainting = false;
       const completedStroke = stroke;
@@ -173,7 +181,22 @@ export default function Index() {
       completedStroke?.end().catch((error: unknown) => {
         console.error("Failed to commit stroke:", error);
       });
-      canvas.releasePointerCapture(event.pointerId);
+      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    };
+    const cancelActivePointer = (pointerId: number) => {
+      if (pointerId !== activePointerId) return;
+      activePointerId = null;
+      panOrigin = null;
+      isPainting = false;
+      stroke?.cancel();
+      stroke = null;
+      if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      cancelActivePointer(event.pointerId);
+    };
+    const onLostPointerCapture = (event: PointerEvent) => {
+      cancelActivePointer(event.pointerId);
     };
     const onPointerLeave = () => {
       cursorScreenRef.current = null;
@@ -191,7 +214,8 @@ export default function Index() {
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
-    canvas.addEventListener("pointercancel", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
+    canvas.addEventListener("lostpointercapture", onLostPointerCapture);
     canvas.addEventListener("pointerleave", onPointerLeave);
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
@@ -202,9 +226,11 @@ export default function Index() {
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
+      canvas.removeEventListener("lostpointercapture", onLostPointerCapture);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("wheel", onWheel);
+      stroke?.cancel();
       brushRef.current = null;
       rendererRef.current = null;
       brush.dispose();

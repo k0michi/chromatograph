@@ -77,16 +77,25 @@ export class BrushStroke {
       }));
       await this.renderer.commitPatch(operations);
     } finally {
-      for (const accumulation of touched) {
-        const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
-        if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.snapshot.bindGroup) {
-          this.renderer.uncommittedOverlays.delete(key);
-        }
-        this.renderer.disposeSnapshot(accumulation.snapshot);
-        this.renderer.disposeSnapshot(accumulation.spareSnapshot);
-      }
-      this.touchedChunks.clear();
+      this.disposeAccumulations(touched);
     }
+  }
+
+  cancel(): void {
+    this.lastStampPoint = null;
+    this.disposeAccumulations(Array.from(this.touchedChunks.values()));
+  }
+
+  private disposeAccumulations(accumulations: readonly ChunkAccumulation[]): void {
+    for (const accumulation of accumulations) {
+      const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
+      if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.snapshot.bindGroup) {
+        this.renderer.uncommittedOverlays.delete(key);
+      }
+      this.renderer.disposeSnapshot(accumulation.snapshot);
+      this.renderer.disposeSnapshot(accumulation.spareSnapshot);
+    }
+    this.touchedChunks.clear();
   }
 
   private stampAt(worldX: number, worldY: number): void {
