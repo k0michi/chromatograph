@@ -64,7 +64,7 @@ export class BrushStroke {
     const touched = Array.from(this.touchedChunks.values());
     try {
       const operations: BlendOperation[] = await Promise.all(touched.map(async (accumulation) => {
-        const rgba = accumulation.snapshot.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE);
+        const rgba = await accumulation.snapshot.framebuffer.readRgba8Async(TILE_SIZE, TILE_SIZE);
         return {
           type: "blend",
           chunk: { x: accumulation.chunkX, y: accumulation.chunkY },

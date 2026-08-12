@@ -438,15 +438,15 @@ export class CanvasRenderer {
     }
   }
 
-  readSnapshotRgba(worldX: number, worldY: number): [number, number, number, number] {
+  readSnapshotRgba(worldX: number, worldY: number): Promise<[number, number, number, number]> {
     const chunkX = Math.floor(worldX / TILE_SIZE);
     const chunkY = Math.floor(worldY / TILE_SIZE);
     const snapshot = this.tiles.get(chunkX, chunkY)?.snapshot;
-    if (!snapshot) return [0, 0, 0, 0];
+    if (!snapshot) return Promise.resolve([0, 0, 0, 0]);
 
     const localX = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldX - chunkX * TILE_SIZE)));
     const localY = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldY - chunkY * TILE_SIZE)));
-    return snapshot.framebuffer.readRgba8Pixel(localX, localY);
+    return snapshot.framebuffer.readRgba8PixelAsync(localX, localY);
   }
 
   dispose(): void {

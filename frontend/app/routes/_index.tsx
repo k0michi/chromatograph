@@ -59,22 +59,31 @@ export default function Index() {
 
     const renderer = new CanvasRenderer(canvas, (patch) => patchClient.send(patch));
     rendererRef.current = renderer;
+    let cursorInspectionPending = false;
     const unsubscribeCanvasContentRendered = renderer.onCanvasContentRendered(() => {
-      if (!cursorNeedsInspectionRef.current) return;
+      if (!cursorNeedsInspectionRef.current || cursorInspectionPending) return;
       const screen = cursorScreenRef.current;
       if (screen) {
         const world = renderer.camera.screenToWorld(screen.x, screen.y);
-        setCursorInspection({
-          screenX: screen.x,
-          screenY: screen.y,
-          worldX: world.x,
-          worldY: world.y,
-          rgba: renderer.readSnapshotRgba(world.x, world.y),
+        cursorNeedsInspectionRef.current = false;
+        cursorInspectionPending = true;
+        void renderer.readSnapshotRgba(world.x, world.y).then((rgba) => {
+          setCursorInspection({
+            screenX: screen.x,
+            screenY: screen.y,
+            worldX: world.x,
+            worldY: world.y,
+            rgba,
+          });
+        }).catch((error: unknown) => {
+          console.error("Failed to inspect snapshot pixel:", error);
+        }).finally(() => {
+          cursorInspectionPending = false;
         });
       } else {
         setCursorInspection(null);
+        cursorNeedsInspectionRef.current = false;
       }
-      cursorNeedsInspectionRef.current = false;
     });
     const unsubscribePatches = patchClient.subscribe((patch) => {
       try {
