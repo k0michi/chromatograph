@@ -4,6 +4,7 @@ import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
 import { PatchWebSocketClient } from "~/network/PatchWebSocketClient";
+import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import type { Route } from "./+types/_index";
 
 export function meta(_args: Route.MetaArgs) {
@@ -14,6 +15,7 @@ export default function Index() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const brushRef = useRef<Brush | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
+  const profilerRef = useRef<FrameProfilerPanelHandle>(null);
 
   const [color, setColor] = useState("#222222");
   const [size, setSize] = useState(40);
@@ -67,8 +69,10 @@ export default function Index() {
     brushRef.current = brush;
     let stroke: BrushStroke | null = null;
 
-    let animationFrame = requestAnimationFrame(function loop() {
+    let animationFrame = requestAnimationFrame(function loop(timestamp) {
+      const renderStart = performance.now();
       renderer.render();
+      profilerRef.current?.sample(timestamp, performance.now() - renderStart);
       animationFrame = requestAnimationFrame(loop);
     });
 
@@ -178,7 +182,14 @@ export default function Index() {
     <>
       <canvas
         ref={canvasRef}
-        style={{ width: "100vw", height: "100vh", display: "block", touchAction: "none" }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          display: "block",
+          touchAction: "none",
+        }}
       />
       <div
         style={{
@@ -242,6 +253,7 @@ export default function Index() {
         </div>
         <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
+      <FrameProfilerPanel ref={profilerRef} />
     </>
   );
 }
