@@ -4,6 +4,12 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [reactRouter()],
+  oxc: {
+    target: "es2024",
+  },
+  build: {
+    target: "es2024",
+  },
   resolve: {
     alias: {
       "~": fileURLToPath(new URL("./app", import.meta.url)),
