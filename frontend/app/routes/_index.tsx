@@ -3,6 +3,7 @@ import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
+import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { PatchWebSocketClient } from "~/network/PatchWebSocketClient";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import type { Route } from "./+types/_index";
@@ -16,12 +17,15 @@ export default function Index() {
   const brushRef = useRef<Brush | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
+  const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
+  const cursorNeedsInspectionRef = useRef(false);
 
   const [color, setColor] = useState("#222222");
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
   const [showGrid, setShowGrid] = useState(false);
+  const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
 
   useEffect(() => {
     const brush = brushRef.current;
@@ -55,6 +59,23 @@ export default function Index() {
 
     const renderer = new CanvasRenderer(canvas, (patch) => patchClient.send(patch));
     rendererRef.current = renderer;
+    const unsubscribeCanvasContentRendered = renderer.onCanvasContentRendered(() => {
+      if (!cursorNeedsInspectionRef.current) return;
+      const screen = cursorScreenRef.current;
+      if (screen) {
+        const world = renderer.camera.screenToWorld(screen.x, screen.y);
+        setCursorInspection({
+          screenX: screen.x,
+          screenY: screen.y,
+          worldX: world.x,
+          worldY: world.y,
+          rgba: renderer.readSnapshotRgba(world.x, world.y),
+        });
+      } else {
+        setCursorInspection(null);
+      }
+      cursorNeedsInspectionRef.current = false;
+    });
     const unsubscribePatches = patchClient.subscribe((patch) => {
       try {
         renderer.applyPatch(patch);
@@ -127,6 +148,11 @@ export default function Index() {
       stroke.begin(world.x, world.y);
     };
     const onPointerMove = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const screenX = event.clientX - rect.left;
+      const screenY = event.clientY - rect.top;
+      cursorScreenRef.current = { x: screenX, y: screenY };
+      cursorNeedsInspectionRef.current = true;
       if (panOrigin) {
         const dx = event.clientX - panOrigin.x;
         const dy = event.clientY - panOrigin.y;
@@ -149,6 +175,10 @@ export default function Index() {
       });
       canvas.releasePointerCapture(event.pointerId);
     };
+    const onPointerLeave = () => {
+      cursorScreenRef.current = null;
+      cursorNeedsInspectionRef.current = true;
+    };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -162,6 +192,7 @@ export default function Index() {
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
+    canvas.addEventListener("pointerleave", onPointerLeave);
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
@@ -172,12 +203,14 @@ export default function Index() {
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("wheel", onWheel);
       brushRef.current = null;
       rendererRef.current = null;
       brush.dispose();
       renderer.dispose();
       unsubscribePatches();
+      unsubscribeCanvasContentRendered();
       patchClient.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,6 +300,7 @@ export default function Index() {
         <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
+      <CursorInspectorPanel inspection={cursorInspection} />
     </>
   );
 }

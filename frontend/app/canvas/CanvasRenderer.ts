@@ -42,6 +42,8 @@ interface HistoryRecord {
   toggleHeadHash: string;
 }
 
+export type CanvasContentRenderedListener = () => void;
+
 export class CanvasRenderer {
   private readonly context: Context;
   private readonly pipeline: RenderPipeline;
@@ -61,6 +63,7 @@ export class CanvasRenderer {
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
   private readonly knownPatchHashes = new Set<string>();
+  private readonly canvasContentRenderedListeners = new Set<CanvasContentRenderedListener>();
   private readonly identity: Promise<Identity> = Identity.generate();
 
   constructor(
@@ -262,6 +265,11 @@ export class CanvasRenderer {
     return this.redoStack.length > 0;
   }
 
+  onCanvasContentRendered(listener: CanvasContentRenderedListener): () => void {
+    this.canvasContentRenderedListeners.add(listener);
+    return () => this.canvasContentRenderedListeners.delete(listener);
+  }
+
   applyPatch(patch: Patch): boolean {
     if (this.knownPatchHashes.has(patch.hash)) {
       return false;
@@ -400,6 +408,8 @@ export class CanvasRenderer {
 
     pass.end();
 
+    for (const listener of this.canvasContentRenderedListeners) listener();
+
     if (this.showGrid) {
       const gridPass = this.context.beginRenderPass();
       gridPass.setPipeline(this.gridPipeline);
@@ -418,6 +428,17 @@ export class CanvasRenderer {
     if (this.context.resize()) {
       this.camera.resize(this.context.canvas.clientWidth, this.context.canvas.clientHeight);
     }
+  }
+
+  readSnapshotRgba(worldX: number, worldY: number): [number, number, number, number] {
+    const chunkX = Math.floor(worldX / TILE_SIZE);
+    const chunkY = Math.floor(worldY / TILE_SIZE);
+    const snapshot = this.tiles.get(chunkX, chunkY)?.snapshot;
+    if (!snapshot) return [0, 0, 0, 0];
+
+    const localX = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldX - chunkX * TILE_SIZE)));
+    const localY = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldY - chunkY * TILE_SIZE)));
+    return snapshot.framebuffer.readRgba8Pixel(localX, localY);
   }
 
   dispose(): void {

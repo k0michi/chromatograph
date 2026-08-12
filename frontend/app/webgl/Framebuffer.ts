@@ -41,6 +41,14 @@ export class Framebuffer implements Disposable {
     return pixels;
   }
 
+  // TODO: proper abstraction
+  readRgba8Pixel(x: number, y: number): [number, number, number, number] {
+    this.bind();
+    const pixel = new Uint8Array(4);
+    this.gl.readPixels(x, y, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixel);
+    return [pixel[0], pixel[1], pixel[2], pixel[3]];
+  }
+
   dispose(): void {
     this.gl.deleteFramebuffer(this.handle);
   }
