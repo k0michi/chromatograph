@@ -27,10 +27,9 @@ function buildStampImage(mask: BrushMask, color: string): RawImageSource {
   const data = new Uint8ClampedArray(mask.width * mask.height * 4);
   for (let i = 0; i < mask.alpha.length; i++) {
     const a = mask.alpha[i];
-    const straight = a / 255;
-    data[i * 4 + 0] = Math.round(r * straight);
-    data[i * 4 + 1] = Math.round(g * straight);
-    data[i * 4 + 2] = Math.round(b * straight);
+    data[i * 4 + 0] = r;
+    data[i * 4 + 1] = g;
+    data[i * 4 + 2] = b;
     data[i * 4 + 3] = a;
   }
   return { width: mask.width, height: mask.height, data };

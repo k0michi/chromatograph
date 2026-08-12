@@ -9,6 +9,7 @@ interface ChunkAccumulation {
   chunkX: number;
   chunkY: number;
   snapshot: TileSnapshot;
+  spareSnapshot: TileSnapshot;
 }
 
 function chunkKey(chunkX: number, chunkY: number): string {
@@ -79,13 +80,14 @@ export class BrushStroke {
           this.renderer.uncommittedOverlays.delete(key);
         }
         this.renderer.disposeSnapshot(accumulation.snapshot);
+        this.renderer.disposeSnapshot(accumulation.spareSnapshot);
       }
       this.touchedChunks.clear();
     }
   }
 
   private stampAt(worldX: number, worldY: number): void {
-    const { bindGroup: stampBindGroup } = this.brush.getStamp(this.renderer);
+    const { texture: stampTexture } = this.brush.getStamp(this.renderer);
     const { size, opacity } = this.brush.settings;
 
     const minChunkX = Math.floor((worldX - size / 2) / TILE_SIZE);
@@ -101,13 +103,21 @@ export class BrushStroke {
         const model = mat3.fromValues(size, 0, 0, 0, size, 0, localX, localY, 1);
         const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
 
-        const pass = this.renderer.beginPass({
-          framebuffer: accumulation.snapshot.framebuffer,
-          width: TILE_SIZE,
-          height: TILE_SIZE,
+        const previous = accumulation.snapshot;
+        this.renderer.compositeOntoSnapshot(
+          previous,
+          accumulation.spareSnapshot,
+          stampTexture,
+          mvp,
+          opacity,
+        );
+        accumulation.snapshot = accumulation.spareSnapshot;
+        accumulation.spareSnapshot = previous;
+        this.renderer.uncommittedOverlays.set(chunkKey(chunkX, chunkY), {
+          chunkX,
+          chunkY,
+          bindGroup: accumulation.snapshot.bindGroup,
         });
-        this.renderer.drawQuad(pass, mvp, stampBindGroup, opacity);
-        pass.end();
       }
     }
   }
@@ -120,7 +130,12 @@ export class BrushStroke {
     }
 
     const snapshot = this.renderer.createEmptySnapshot();
-    const accumulation: ChunkAccumulation = { chunkX, chunkY, snapshot };
+    const accumulation: ChunkAccumulation = {
+      chunkX,
+      chunkY,
+      snapshot,
+      spareSnapshot: this.renderer.createEmptySnapshot(),
+    };
     this.touchedChunks.set(key, accumulation);
     this.renderer.uncommittedOverlays.set(key, { chunkX, chunkY, bindGroup: snapshot.bindGroup });
     return accumulation;

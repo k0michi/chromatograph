@@ -124,6 +124,11 @@ export class RenderPipeline implements Disposable {
   }
 
   /** @internal */
+  setFloat2(name: string, x: number, y: number): void {
+    this.gl.uniform2f(this.uniformLocation(name), x, y);
+  }
+
+  /** @internal */
   setInt(name: string, value: number): void {
     this.gl.uniform1i(this.uniformLocation(name), value);
   }

@@ -9,6 +9,12 @@ import type { RenderPipeline } from "~/webgl/RenderPipeline";
 import { ShaderStage } from "~/webgl/ShaderStage";
 import type { Texture } from "~/webgl/Texture";
 import { Camera2D } from "./Camera2D";
+import {
+  CANVAS_DISPLAY_FRAGMENT_SHADER,
+  CANVAS_VERTEX_SHADER,
+  SNAPSHOT_COPY_FRAGMENT_SHADER,
+  STRAIGHT_COMPOSITE_FRAGMENT_SHADER,
+} from "./CanvasShaders";
 import { CHUNK_VIEW_PROJECTION } from "./chunkSpace";
 import type { BlendOperation, UndoOperation } from "./Operation";
 import { Patch } from "./Patch";
@@ -16,37 +22,9 @@ import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
 import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from "./Tile";
 
-const VERTEX_SHADER = `#version 300 es
-layout(location = 0) in vec2 aPosition;
-layout(location = 1) in vec2 aUv;
-
-uniform mat3 uMvp;
-
-out vec2 vUv;
-
-void main() {
-  vUv = aUv;
-  vec3 clip = uMvp * vec3(aPosition, 1.0);
-  gl_Position = vec4(clip.xy, 0.0, 1.0);
-}
-`;
-
-const FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-in vec2 vUv;
-uniform sampler2D uImage;
-uniform float uOpacity;
-
-out vec4 outColor;
-
-void main() {
-  outColor = texture(uImage, vUv) * uOpacity;
-}
-`;
-
 const BACKGROUND_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 const IMAGE_BINDING = 0;
+const DESTINATION_BINDING = 1;
 const SNAPSHOT_MODEL = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, 0, 0, 1);
 const SNAPSHOT_MVP = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, SNAPSHOT_MODEL);
 
@@ -65,8 +43,11 @@ interface HistoryRecord {
 export class CanvasRenderer {
   private readonly context: Context;
   private readonly pipeline: RenderPipeline;
+  private readonly copyPipeline: RenderPipeline;
+  private readonly straightCompositePipeline: RenderPipeline;
   private readonly quad: QuadGeometry;
   private readonly bindGroupLayout: BindGroupLayout;
+  private readonly compositeBindGroupLayout: BindGroupLayout;
   readonly gl: WebGL2RenderingContext;
   readonly device: Device;
   readonly camera = new Camera2D();
@@ -90,24 +71,53 @@ export class CanvasRenderer {
     this.bindGroupLayout = device.createBindGroupLayout({
       entries: [{ binding: IMAGE_BINDING, type: "texture" }],
     });
+    this.compositeBindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: IMAGE_BINDING, type: "texture" },
+        { binding: DESTINATION_BINDING, type: "texture" },
+      ],
+    });
 
-    using vertexShader = device.createShader({ stage: ShaderStage.VERTEX, source: VERTEX_SHADER });
-    using fragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: FRAGMENT_SHADER });
+    using vertexShader = device.createShader({ stage: ShaderStage.VERTEX, source: CANVAS_VERTEX_SHADER });
+    using fragmentShader = device.createShader({ stage: ShaderStage.FRAGMENT, source: CANVAS_DISPLAY_FRAGMENT_SHADER });
+    using copyFragmentShader = device.createShader({
+      stage: ShaderStage.FRAGMENT,
+      source: SNAPSHOT_COPY_FRAGMENT_SHADER,
+    });
+    using compositeFragmentShader = device.createShader({
+      stage: ShaderStage.FRAGMENT,
+      source: STRAIGHT_COMPOSITE_FRAGMENT_SHADER,
+    });
+    const vertexBuffers = [
+      {
+        arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
+        attributes: [
+          { shaderLocation: 0, format: "float32x2" as const, offset: 0 },
+          { shaderLocation: 1, format: "float32x2" as const, offset: 2 * Float32Array.BYTES_PER_ELEMENT },
+        ],
+      },
+    ];
     this.pipeline = device.createRenderPipeline({
       vertexShader,
       fragmentShader,
       topology: "triangle-strip",
       blend: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
       bindGroupLayout: this.bindGroupLayout,
-      vertexBuffers: [
-        {
-          arrayStride: 4 * Float32Array.BYTES_PER_ELEMENT,
-          attributes: [
-            { shaderLocation: 0, format: "float32x2", offset: 0 },
-            { shaderLocation: 1, format: "float32x2", offset: 2 * Float32Array.BYTES_PER_ELEMENT },
-          ],
-        },
-      ],
+      vertexBuffers,
+    });
+    this.copyPipeline = device.createRenderPipeline({
+      vertexShader,
+      fragmentShader: copyFragmentShader,
+      topology: "triangle-strip",
+      bindGroupLayout: this.bindGroupLayout,
+      vertexBuffers,
+    });
+    this.straightCompositePipeline = device.createRenderPipeline({
+      vertexShader,
+      fragmentShader: compositeFragmentShader,
+      topology: "triangle-strip",
+      bindGroupLayout: this.compositeBindGroupLayout,
+      vertexBuffers,
     });
 
     this.quad = new QuadGeometry(device);
@@ -135,17 +145,59 @@ export class CanvasRenderer {
     pass.draw(this.quad.vertexCount);
   }
 
-  private paintOntoSnapshot(snapshot: TileSnapshot, bindGroup: BindGroup, opacity: number): void {
-    const pass = this.beginPass({ framebuffer: snapshot.framebuffer, width: TILE_SIZE, height: TILE_SIZE });
-    this.drawQuad(pass, SNAPSHOT_MVP, bindGroup, opacity);
-    pass.end();
+  compositeOntoSnapshot(
+    destination: TileSnapshot,
+    output: TileSnapshot,
+    source: Texture,
+    sourceMvp: mat3,
+    opacity: number,
+    copyDestination = true,
+  ): void {
+    if (destination === output) {
+      throw new Error("Straight-alpha composition requires different input and output snapshots.");
+    }
+
+    if (copyDestination) {
+      const copyPass = this.context.beginRenderPass({
+        target: { framebuffer: output.framebuffer, width: TILE_SIZE, height: TILE_SIZE },
+      });
+      copyPass.setPipeline(this.copyPipeline);
+      copyPass.setVertexBuffer(0, this.quad.buffer);
+      copyPass.setUniformInt("uImage", IMAGE_BINDING);
+      this.drawQuad(copyPass, SNAPSHOT_MVP, destination.bindGroup, 1);
+      copyPass.end();
+    }
+
+    const compositeBindGroup = this.device.createBindGroup({
+      layout: this.compositeBindGroupLayout,
+      entries: [
+        { binding: IMAGE_BINDING, texture: source },
+        { binding: DESTINATION_BINDING, texture: destination.texture },
+      ],
+    });
+    const compositePass = this.context.beginRenderPass({
+      target: { framebuffer: output.framebuffer, width: TILE_SIZE, height: TILE_SIZE },
+    });
+    compositePass.setPipeline(this.straightCompositePipeline);
+    compositePass.setVertexBuffer(0, this.quad.buffer);
+    compositePass.setUniformInt("uSource", IMAGE_BINDING);
+    compositePass.setUniformInt("uDestination", DESTINATION_BINDING);
+    compositePass.setUniformFloat2("uTargetSize", TILE_SIZE, TILE_SIZE);
+    this.drawQuad(compositePass, sourceMvp, compositeBindGroup, opacity);
+    compositePass.end();
   }
 
-  private paintOperationOntoSnapshot(snapshot: TileSnapshot, operation: BlendOperation): void {
+  private paintOperationOntoSnapshot(
+    destination: TileSnapshot,
+    output: TileSnapshot,
+    operation: BlendOperation,
+  ): void {
     using texture = this.device.createTexture({
       source: { width: TILE_SIZE, height: TILE_SIZE, data: operation.imageBytes },
+      minFilter: "nearest",
+      magFilter: "nearest",
     });
-    this.paintOntoSnapshot(snapshot, this.createPatchBindGroup(texture), operation.opacity);
+    this.compositeOntoSnapshot(destination, output, texture, SNAPSHOT_MVP, operation.opacity, false);
   }
 
   createEmptySnapshot(): TileSnapshot {
@@ -272,10 +324,13 @@ export class CanvasRenderer {
   }
 
   private rebuildSnapshot(tile: Tile): void {
-    const rebuilt = this.createEmptySnapshot();
+    let rebuilt = this.createEmptySnapshot();
+    let spare = this.createEmptySnapshot();
     for (const entry of tile.resolveActiveBlendEntries()) {
-      this.paintOperationOntoSnapshot(rebuilt, entry.op);
+      this.paintOperationOntoSnapshot(rebuilt, spare, entry.op);
+      [rebuilt, spare] = [spare, rebuilt];
     }
+    this.disposeSnapshot(spare);
     if (tile.snapshot) {
       this.disposeSnapshot(tile.snapshot);
     }
@@ -339,6 +394,8 @@ export class CanvasRenderer {
   dispose(): void {
     this.quad.dispose();
     this.pipeline.dispose();
+    this.copyPipeline.dispose();
+    this.straightCompositePipeline.dispose();
     for (const tile of this.tiles) {
       if (tile.snapshot) {
         this.disposeSnapshot(tile.snapshot);

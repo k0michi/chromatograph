@@ -70,6 +70,10 @@ export class RenderPassEncoder {
     this.requirePipeline().setFloat(name, value);
   }
 
+  setUniformFloat2(name: string, x: number, y: number): void {
+    this.requirePipeline().setFloat2(name, x, y);
+  }
+
   setUniformInt(name: string, value: number): void {
     this.requirePipeline().setInt(name, value);
   }
