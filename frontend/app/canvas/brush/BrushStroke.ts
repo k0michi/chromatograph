@@ -3,6 +3,7 @@ import type { CanvasRenderer } from "../CanvasRenderer";
 import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
 import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
 import { TILE_SIZE, type TileSnapshot } from "../Tile";
+import { encodePngInWorker } from "../PngEncoderWorker";
 import type { Brush } from "./Brush";
 
 interface ChunkAccumulation {
@@ -61,17 +62,19 @@ export class BrushStroke {
     }
 
     const touched = Array.from(this.touchedChunks.values());
-    const operations: BlendOperation[] = touched.map((accumulation) => ({
-      type: "blend",
-      chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
-      parents: this.renderer.getChunkParents(accumulation.chunkX, accumulation.chunkY),
-      compositeOp: CompositeOp.SourceOver,
-      blendMode: BlendMode.Normal,
-      opacity: 1,
-      imageBytes: accumulation.snapshot.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE),
-    }));
-
     try {
+      const operations: BlendOperation[] = await Promise.all(touched.map(async (accumulation) => {
+        const rgba = accumulation.snapshot.framebuffer.readRgba8(TILE_SIZE, TILE_SIZE);
+        return {
+          type: "blend",
+          chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
+          parents: this.renderer.getChunkParents(accumulation.chunkX, accumulation.chunkY),
+          compositeOp: CompositeOp.SourceOver,
+          blendMode: BlendMode.Normal,
+          opacity: 1,
+          imageBytes: await encodePngInWorker(rgba, TILE_SIZE, TILE_SIZE),
+        };
+      }));
       await this.renderer.commitPatch(operations);
     } finally {
       for (const accumulation of touched) {

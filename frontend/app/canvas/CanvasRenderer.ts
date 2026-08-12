@@ -22,6 +22,7 @@ import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
 import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from "./Tile";
+import { PngCodec } from "./PngCodec";
 
 const BACKGROUND_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 const IMAGE_BINDING = 0;
@@ -208,8 +209,9 @@ export class CanvasRenderer {
     output: TileSnapshot,
     operation: BlendOperation,
   ): void {
+    const decoded = PngCodec.decodeRGBA(operation.imageBytes, TILE_SIZE, TILE_SIZE);
     using texture = this.device.createTexture({
-      source: { width: TILE_SIZE, height: TILE_SIZE, data: operation.imageBytes },
+      source: { width: decoded.width, height: decoded.height, data: decoded.rgba },
       minFilter: "nearest",
       magFilter: "nearest",
     });
@@ -350,9 +352,15 @@ export class CanvasRenderer {
   private rebuildSnapshot(tile: Tile): void {
     let rebuilt = this.createEmptySnapshot();
     let spare = this.createEmptySnapshot();
-    for (const entry of tile.resolveActiveBlendEntries()) {
-      this.paintOperationOntoSnapshot(rebuilt, spare, entry.op);
-      [rebuilt, spare] = [spare, rebuilt];
+    try {
+      for (const entry of tile.resolveActiveBlendEntries()) {
+        this.paintOperationOntoSnapshot(rebuilt, spare, entry.op);
+        [rebuilt, spare] = [spare, rebuilt];
+      }
+    } catch (error) {
+      this.disposeSnapshot(rebuilt);
+      this.disposeSnapshot(spare);
+      throw error;
     }
     this.disposeSnapshot(spare);
     if (tile.snapshot) {
