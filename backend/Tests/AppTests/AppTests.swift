@@ -4,6 +4,7 @@ import Hummingbird
 import HummingbirdTesting
 import HummingbirdWSTesting
 import Logging
+import PNG
 import Testing
 
 @testable import ChromatographBackend
@@ -56,7 +57,7 @@ struct AppTests {
     }
 
     @Test
-    func wsAcceptsPatchLargerThanOneMegabyte() async throws {
+    func wsAcceptsPatchWithValidRGBA8PNG() async throws {
         let largePatch = testPatch(operations: [
             .blend(BlendOperation(
                 chunk: TileChunk(x: 0, y: 0),
@@ -64,11 +65,10 @@ struct AppTests {
                 compositeOp: .sourceOver,
                 blendMode: .normal,
                 opacity: 1,
-                imageBytes: Data(repeating: 0x7f, count: 1_100_000)
+                imageBytes: try testPNG()
             ))
         ])
         let packet = ByteBuffer(bytes: try PatchPacketCodec.encode(largePatch))
-        #expect(packet.readableBytes > 1_000_000)
 
         let app = try await buildApplication(reader: reader)
         try await app.test(.live) { client in
@@ -79,6 +79,29 @@ struct AppTests {
                 try await outbound.write(.binary(packet))
                 var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
                 #expect(try await iterator.next() == .binary(packet))
+            }
+        }
+    }
+
+    @Test
+    func wsRejectsBlendWithInvalidPNG() async throws {
+        let patch = testPatch(operations: [
+            .blend(BlendOperation(
+                chunk: TileChunk(x: 0, y: 0),
+                parents: [],
+                compositeOp: .sourceOver,
+                blendMode: .normal,
+                opacity: 1,
+                imageBytes: Data([0, 1, 2])
+            ))
+        ])
+        let packet = ByteBuffer(bytes: try PatchPacketCodec.encode(patch))
+        let app = try await buildApplication(reader: reader)
+        try await app.test(.live) { client in
+            _ = try await client.ws("/ws") { inbound, outbound, _ in
+                try await outbound.write(.binary(packet))
+                var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
+                #expect(try await iterator.next() == .text("Invalid patch packet"))
             }
         }
     }
@@ -107,6 +130,7 @@ struct AppTests {
                     await ready.wait()
                     _ = try await client.ws("/ws") { inbound, outbound, _ in
                         var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
+                        #expect(try await iterator.next() == .binary(registrationPacket))
                         try await outbound.write(.binary(patchPacket))
                         #expect(try await iterator.next() == .binary(patchPacket))
                     }
@@ -115,13 +139,80 @@ struct AppTests {
             }
         }
     }
+
+    @Test
+    func wsReplaysCommittedPatchesToNewConnectionsInOrder() async throws {
+        let first = ByteBuffer(bytes: try PatchPacketCodec.encode(testPatch(
+            hashByte: "21",
+            operations: [.undo(UndoOperation(chunk: TileChunk(x: 1, y: 1), parents: []))]
+        )))
+        let second = ByteBuffer(bytes: try PatchPacketCodec.encode(testPatch(
+            hashByte: "22",
+            operations: [.undo(UndoOperation(chunk: TileChunk(x: 2, y: 2), parents: []))]
+        )))
+        let historyReady = AsyncGate()
+        let app = try await buildApplication(reader: reader)
+
+        try await app.test(.live) { client in
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    _ = try await client.ws("/ws") { inbound, outbound, _ in
+                        var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
+                        try await outbound.write(.binary(first))
+                        #expect(try await iterator.next() == .binary(first))
+                        try await outbound.write(.binary(second))
+                        #expect(try await iterator.next() == .binary(second))
+                        await historyReady.open()
+                    }
+                }
+                group.addTask {
+                    await historyReady.wait()
+                    _ = try await client.ws("/ws") { inbound, _, _ in
+                        var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
+                        let replayedFirst = try await iterator.next()
+                        let replayedSecond = try await iterator.next()
+                        #expect(replayedFirst == .binary(first))
+                        #expect(replayedSecond == .binary(second))
+                    }
+                }
+                try await group.waitForAll()
+            }
+        }
+    }
 }
 
-private func testPatch(operations: [ChromatographBackend.Operation] = []) -> Patch {
+private struct PNGMemoryDestination: PNG.BytestreamDestination {
+    var bytes: [UInt8] = []
+
+    mutating func write(_ bytes: [UInt8]) -> Void? {
+        self.bytes.append(contentsOf: bytes)
+        return ()
+    }
+}
+
+private func testPNG() throws -> Data {
+    let pixels = [PNG.RGBA<UInt8>](
+        repeating: .init(12, 34, 56, 78),
+        count: 256 * 256
+    )
+    let image = PNG.Image(
+        packing: pixels,
+        size: (x: 256, y: 256),
+        layout: .init(format: .rgba8(palette: [], fill: nil))
+    )
+    var destination = PNGMemoryDestination()
+    try image.compress(stream: &destination, level: 3)
+    return Data(destination.bytes)
+}
+
+private func testPatch(
+    hashByte: String = "22",
+    operations: [ChromatographBackend.Operation] = []
+) -> Patch {
     Patch(
         operations: operations,
         publicKeyHex: String(repeating: "11", count: 32),
-        hash: String(repeating: "22", count: 32),
+        hash: String(repeating: hashByte, count: 32),
         signatureHex: String(repeating: "33", count: 64)
     )
 }

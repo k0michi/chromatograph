@@ -1,5 +1,5 @@
 {
-  "originHash" : "b33e714a3d32104e6f9d7c7b7c0ae12d27deb71b5fa0b117ce118b408476d40d",
+  "originHash" : "613ef606c76500682c95833d7c85df95df9316ae56d5f8f4c37bcaea6fc3ed28",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -20,6 +20,15 @@
       }
     },
     {
+      "identity" : "h",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/rarestype/h",
+      "state" : {
+        "revision" : "aa3626829160917d4378330617971977cbd78f5b",
+        "version" : "1.0.1"
+      }
+    },
+    {
       "identity" : "hummingbird",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hummingbird-project/hummingbird.git",
@@ -35,15 +44,6 @@
       "state" : {
         "revision" : "89c66b8d6655209268c44f619afcf771d8d83ec9",
         "version" : "2.7.0"
-      }
-    },
-    {
-      "identity" : "libwebp-xcode",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/SDWebImage/libwebp-Xcode.git",
-      "state" : {
-        "revision" : "2b5256c29ff4e20f2a0d5ee863b62b1a22144434",
-        "version" : "1.6.0"
       }
     },
     {
@@ -218,6 +218,15 @@
       }
     },
     {
+      "identity" : "swift-png",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tayloraswift/swift-png.git",
+      "state" : {
+        "revision" : "8a0bcd4df5e4b307c804937776a56dd6ecdf6396",
+        "version" : "4.5.1"
+      }
+    },
+    {
       "identity" : "swift-service-context",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-service-context.git",
@@ -242,15 +251,6 @@
       "state" : {
         "revision" : "50688cacbd41d547e9eb9f7a213542340b7c442b",
         "version" : "1.7.5"
-      }
-    },
-    {
-      "identity" : "swift-webp",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ainame/Swift-WebP.git",
-      "state" : {
-        "revision" : "4e7310667297f066e4884b6258a3a646cac8a50b",
-        "version" : "0.6.1"
       }
     },
     {

@@ -8,6 +8,18 @@ import Logging
 typealias AppRequestContext = BasicRequestContext
 typealias AppWSRequestContext = BasicWebSocketRequestContext
 private let maximumPatchPacketSize = 64 * 1024 * 1024
+private let patchImageSize = 256
+
+private func validatePatchImages(_ patch: Patch) throws {
+    for operation in patch.operations {
+        guard case .blend(let blend) = operation else { continue }
+        try PNGValidator.validateRGBA8(
+            blend.imageBytes,
+            width: patchImageSize,
+            height: patchImageSize
+        )
+    }
+}
 
 ///  Build application
 /// - Parameter reader: configuration reader
@@ -57,14 +69,15 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
     router.ws("/ws") { _, _ in
         return .upgrade()
     } onUpgrade: { inbound, outbound, _ in
-        let connectionID = await broadcaster.add(outbound)
+        let connectionID = try await broadcaster.synchronize(outbound)
         do {
             for try await message in inbound.messages(maxSize: maximumPatchPacketSize) {
                 switch message {
                 case .binary(let buffer):
                     do {
-                        _ = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
-                        await broadcaster.broadcast(buffer)
+                        let patch = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
+                        try validatePatchImages(patch)
+                        await broadcaster.accept(patch, packet: buffer)
                     } catch {
                         try await outbound.write(.text("Invalid patch packet"))
                     }
