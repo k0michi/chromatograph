@@ -137,6 +137,7 @@ export default function Index() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
       canvas.setPointerCapture(event.pointerId);
       if (isSpaceHeld) {
         panOrigin = { x: event.clientX, y: event.clientY };
