@@ -31,7 +31,7 @@ describe("OperationDecoder", () => {
 
   it("rejects truncated and trailing packets", () => {
     const packet = OperationEncoder.operations([]);
-    expect(() => OperationDecoder.operations(packet.slice(0, -1))).toThrow("Truncated operation packet");
+    expect(() => OperationDecoder.operations(packet.slice(0, -1))).toThrow("Unexpected end of binary data");
     expect(() => OperationDecoder.operations(new Uint8Array([...packet, 0]))).toThrow("trailing byte");
   });
 });
@@ -97,7 +97,7 @@ describe("Patch packet codec", () => {
 
   it("rejects truncated and trailing Patch packets", () => {
     const packet = PatchEncoder.encode(patch);
-    expect(() => PatchDecoder.decode(packet.slice(0, -1))).toThrow("Truncated Patch packet");
+    expect(() => PatchDecoder.decode(packet.slice(0, -1))).toThrow("Unexpected end of binary data");
     expect(() => PatchDecoder.decode(new Uint8Array([...packet, 0]))).toThrow("trailing byte");
   });
 });

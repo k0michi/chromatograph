@@ -1,5 +1,6 @@
-import { Bytes } from "~/crypto/bytes";
 import { Hex } from "~/crypto/hex";
+import { BinaryReader } from "~/network/BinaryReader";
+import { BinaryWriter } from "~/network/BinaryWriter";
 import { BlendMode, CompositeOp, type BlendOperation, type Operation, type UndoOperation } from "./Operation";
 
 export class OperationEncoder {
@@ -17,18 +18,18 @@ export class OperationEncoder {
       return bytes;
     });
 
-    return Bytes.concat([
-      Bytes.uint32(this.blendOperation),
-      Bytes.int32(op.chunk.x),
-      Bytes.int32(op.chunk.y),
-      Bytes.uint32(parents.length),
-      ...parents,
-      Bytes.uint32(op.compositeOp),
-      Bytes.uint32(op.blendMode),
-      Bytes.float32(op.opacity),
-      Bytes.uint32(op.imageBytes.length),
-      op.imageBytes,
-    ]);
+    const writer = new BinaryWriter();
+    writer.writeUInt32(this.blendOperation);
+    writer.writeInt32(op.chunk.x);
+    writer.writeInt32(op.chunk.y);
+    writer.writeUInt32(parents.length);
+    for (const parent of parents) writer.writeBytes(parent);
+    writer.writeUInt32(op.compositeOp);
+    writer.writeUInt32(op.blendMode);
+    writer.writeFloat32(op.opacity);
+    writer.writeUInt32(op.imageBytes.length);
+    writer.writeBytes(op.imageBytes);
+    return writer.toBytes();
   }
 
   static undo(op: UndoOperation): Uint8Array<ArrayBuffer> {
@@ -39,21 +40,23 @@ export class OperationEncoder {
       }
       return bytes;
     });
-    return Bytes.concat([
-      Bytes.uint32(this.undoOperation),
-      Bytes.int32(op.chunk.x),
-      Bytes.int32(op.chunk.y),
-      Bytes.uint32(parents.length),
-      ...parents,
-    ]);
+    const writer = new BinaryWriter();
+    writer.writeUInt32(this.undoOperation);
+    writer.writeInt32(op.chunk.x);
+    writer.writeInt32(op.chunk.y);
+    writer.writeUInt32(parents.length);
+    for (const parent of parents) writer.writeBytes(parent);
+    return writer.toBytes();
   }
 
   static operations(operations: readonly Operation[]): Uint8Array<ArrayBuffer> {
-    return Bytes.concat([
-      Bytes.uint32(this.formatVersion),
-      Bytes.uint32(operations.length),
-      ...operations.map((operation) => operation.type === "blend" ? this.blend(operation) : this.undo(operation)),
-    ]);
+    const writer = new BinaryWriter();
+    writer.writeUInt32(this.formatVersion);
+    writer.writeUInt32(operations.length);
+    for (const operation of operations) {
+      writer.writeBytes(operation.type === "blend" ? this.blend(operation) : this.undo(operation));
+    }
+    return writer.toBytes();
   }
 }
 
@@ -65,34 +68,34 @@ export class OperationDecoder {
 
   static operations(packet: ArrayBuffer | Uint8Array<ArrayBufferLike>): readonly Operation[] {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
-    const reader = new OperationPacketReader(bytes);
-    const version = reader.uint32();
+    const reader = new BinaryReader(bytes);
+    const version = reader.readUInt32();
     if (version !== this.formatVersion) {
       throw new Error(`Unsupported operation packet version: ${version}.`);
     }
 
-    const count = reader.uint32();
+    const count = reader.readUInt32();
     const operations: Operation[] = [];
     for (let index = 0; index < count; index++) {
-      const type = reader.uint32();
-      const chunk = { x: reader.int32(), y: reader.int32() };
-      const parentCount = reader.uint32();
+      const type = reader.readUInt32();
+      const chunk = { x: reader.readInt32(), y: reader.readInt32() };
+      const parentCount = reader.readUInt32();
       const parents: string[] = [];
       for (let parentIndex = 0; parentIndex < parentCount; parentIndex++) {
-        parents.push(Hex.fromBytes(reader.bytes(this.sha256Bytes)));
+        parents.push(Hex.fromBytes(reader.readBytes(this.sha256Bytes)));
       }
 
       if (type === this.blendOperation) {
-        const compositeOp = reader.uint32();
+        const compositeOp = reader.readUInt32();
         if (!Object.values(CompositeOp).includes(compositeOp)) {
           throw new Error(`Invalid composite operation: ${compositeOp}.`);
         }
-        const blendMode = reader.uint32();
+        const blendMode = reader.readUInt32();
         if (!Object.values(BlendMode).includes(blendMode)) {
           throw new Error(`Invalid blend mode: ${blendMode}.`);
         }
-        const opacity = reader.float32();
-        const imageBytes = reader.bytes(reader.uint32());
+        const opacity = reader.readFloat32();
+        const imageBytes = reader.readBytes(reader.readUInt32());
         operations.push({
           type: "blend",
           chunk,
@@ -110,59 +113,8 @@ export class OperationDecoder {
     }
 
     if (!reader.isAtEnd) {
-      throw new Error(`Operation packet has ${reader.remaining} trailing byte(s).`);
+      throw new Error(`Operation packet has ${reader.remainingByteCount} trailing byte(s).`);
     }
     return operations;
-  }
-}
-
-class OperationPacketReader {
-  private readonly view: DataView;
-  private offset = 0;
-
-  constructor(private readonly packet: Uint8Array<ArrayBufferLike>) {
-    this.view = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
-  }
-
-  get remaining(): number {
-    return this.packet.byteLength - this.offset;
-  }
-
-  get isAtEnd(): boolean {
-    return this.remaining === 0;
-  }
-
-  uint32(): number {
-    this.require(4);
-    const value = this.view.getUint32(this.offset, false);
-    this.offset += 4;
-    return value;
-  }
-
-  int32(): number {
-    this.require(4);
-    const value = this.view.getInt32(this.offset, false);
-    this.offset += 4;
-    return value;
-  }
-
-  float32(): number {
-    this.require(4);
-    const value = this.view.getFloat32(this.offset, false);
-    this.offset += 4;
-    return value;
-  }
-
-  bytes(count: number): Uint8Array<ArrayBuffer> {
-    this.require(count);
-    const result = this.packet.slice(this.offset, this.offset + count);
-    this.offset += count;
-    return result;
-  }
-
-  private require(count: number): void {
-    if (!Number.isSafeInteger(count) || count < 0 || count > this.remaining) {
-      throw new Error("Truncated operation packet.");
-    }
   }
 }
