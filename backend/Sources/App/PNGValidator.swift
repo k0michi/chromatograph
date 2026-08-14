@@ -1,5 +1,4 @@
 import Foundation
-import PNG
 
 enum PNGValidationError: Error, Equatable {
     case invalidDimensions(width: Int, height: Int)
@@ -12,7 +11,7 @@ enum PNGValidator {
         guard decoded.width == width, decoded.height == height else {
             throw PNGValidationError.invalidDimensions(width: decoded.width, height: decoded.height)
         }
-        guard case .rgba8 = decoded.format else {
+        guard decoded.isRGBA8 else {
             throw PNGValidationError.invalidFormat
         }
     }

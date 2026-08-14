@@ -7,7 +7,7 @@ FROM swift:6.3-noble AS build
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev \
+    && apt-get install -y libjemalloc-dev libpng-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up a build area
@@ -18,6 +18,7 @@ WORKDIR /build
 # as long as your Package.swift/Package.resolved
 # files do not change.
 COPY ./Package.* ./
+COPY ./swift-libpng ./swift-libpng
 RUN swift package resolve
 
 # Copy entire repo into container
@@ -56,6 +57,7 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q dist-upgrade -y \
     && apt-get -q install -y \
       libjemalloc2 \
+      libpng16-16t64 \
       ca-certificates \
       tzdata \
 # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.

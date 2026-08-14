@@ -1,69 +1,127 @@
 import Foundation
-import PNG
+import LibPNG
 
 struct DecodedPNG: Sendable {
   let width: Int
   let height: Int
-  let format: PNG.Format
+  let isRGBA8: Bool
   let rgba: [UInt8]
 }
 
 enum PNGCodec {
   static func decode(_ data: Data) throws -> DecodedPNG {
-    var source = PNGMemorySource(Array(data))
-    let image = try PNG.Image.decompress(stream: &source)
-    let rgba = image.unpack(as: PNG.RGBA<UInt8>.self).flatMap { [$0.r, $0.g, $0.b, $0.a] }
-    return DecodedPNG(
-      width: image.size.x,
-      height: image.size.y,
-      format: image.layout.format,
-      rgba: rgba
-    )
+    do {
+      let png = try ReadStruct.create()
+      let info = try png.createInfoStruct()
+
+      try png.setReadData(data)
+      try png.readInfo(info)
+
+      let header = try png.getIHDR(info)
+      let sourceIsRGBA8 = header.bitDepth == 8 && header.colorType == .rgba
+      let hasTransparency = try png.getValid(info, .transparency).contains(.transparency)
+
+      if header.colorType == .palette ||
+        (header.colorType == .grayscale && header.bitDepth < 8) ||
+        hasTransparency
+      {
+        try png.setExpand()
+      }
+      if header.bitDepth == 16 {
+        try png.setStrip16()
+      }
+      if header.colorType == .grayscale || header.colorType == .grayscaleAlpha {
+        try png.setGrayToRGB()
+      }
+      if !header.colorType.hasAlpha && !hasTransparency {
+        try png.setAddAlpha(0xff, after: true)
+      }
+
+      try png.readUpdateInfo(info)
+
+      let rowBytes = try png.getRowBytes(info)
+      let (byteCount, overflow) = rowBytes.multipliedReportingOverflow(by: Int(header.height))
+      guard !overflow else {
+        throw PNGCodecError.decodingFailed("decoded PNG byte count overflow")
+      }
+
+      var rgba = [UInt8](repeating: 0, count: byteCount)
+      try png.readImage(info, into: &rgba, rowBytes: rowBytes)
+      try png.readEnd(info)
+
+      let expectedRowBytes = Int(header.width) * 4
+      guard rowBytes == expectedRowBytes else {
+        throw PNGCodecError.decodingFailed(
+          "expected RGBA8 row size \(expectedRowBytes), got \(rowBytes)"
+        )
+      }
+
+      return DecodedPNG(
+        width: Int(header.width),
+        height: Int(header.height),
+        isRGBA8: sourceIsRGBA8,
+        rgba: rgba
+      )
+    } catch let error as PNGCodecError {
+      throw error
+    } catch {
+      throw PNGCodecError.decodingFailed(String(describing: error))
+    }
   }
 
   static func encodeRGBA8(_ rgba: [UInt8], width: Int, height: Int) throws -> Data {
-    let expectedCount = width * height * 4
-    guard width > 0, height > 0, rgba.count == expectedCount else {
+    let (pixelCount, pixelCountOverflow) = width.multipliedReportingOverflow(by: height)
+    let (expectedCount, byteCountOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+    guard
+      width > 0, height > 0,
+      width <= UInt32.max, height <= UInt32.max,
+      !pixelCountOverflow, !byteCountOverflow,
+      rgba.count == expectedCount
+    else {
       throw PNGCodecError.invalidRGBAByteCount(rgba.count)
     }
-    let pixels = stride(from: 0, to: rgba.count, by: 4).map {
-      PNG.RGBA<UInt8>(rgba[$0], rgba[$0 + 1], rgba[$0 + 2], rgba[$0 + 3])
+
+    do {
+      let png = try WriteStruct.create()
+      let info = try png.createInfoStruct()
+      let rowBytes = width * 4
+
+      try png.setWriteData()
+      try png.setIHDR(
+        info,
+        IHDR(
+          width: UInt32(width),
+          height: UInt32(height),
+          bitDepth: 8,
+          colorType: .rgba
+        )
+      )
+      try png.writeInfo(info)
+
+      try rgba.withUnsafeBufferPointer { pixels in
+        for rowIndex in 0..<height {
+          let start = rowIndex * rowBytes
+          let row = UnsafeBufferPointer(rebasing: pixels[start..<start + rowBytes])
+          try png.writeRow(info, row)
+        }
+      }
+
+      try png.writeEnd(info)
+      return try png.writeData()
+    } catch {
+      throw PNGCodecError.encodingFailed(String(describing: error))
     }
-    let image = PNG.Image(
-      packing: pixels,
-      size: (x: width, y: height),
-      layout: .init(format: .rgba8(palette: [], fill: nil))
-    )
-    var destination = PNGMemoryDestination()
-    try image.compress(stream: &destination, level: 3)
-    return Data(destination.bytes)
   }
 }
 
 enum PNGCodecError: Error, Equatable {
   case invalidRGBAByteCount(Int)
+  case decodingFailed(String)
+  case encodingFailed(String)
 }
 
-private struct PNGMemorySource: PNG.BytestreamSource {
-  private let bytes: [UInt8]
-  private var position = 0
-
-  init(_ bytes: [UInt8]) {
-    self.bytes = bytes
-  }
-
-  mutating func read(count: Int) -> [UInt8]? {
-    guard count >= 0, position <= bytes.count - count else { return nil }
-    defer { position += count }
-    return Array(bytes[position..<position + count])
-  }
-}
-
-private struct PNGMemoryDestination: PNG.BytestreamDestination {
-  var bytes: [UInt8] = []
-
-  mutating func write(_ bytes: [UInt8]) -> Void? {
-    self.bytes.append(contentsOf: bytes)
-    return ()
+private extension ColorType {
+  var hasAlpha: Bool {
+    self == .grayscaleAlpha || self == .rgba
   }
 }

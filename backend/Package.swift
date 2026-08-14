@@ -18,6 +18,7 @@ let package = Package(
             traits: [.defaults, "CommandLineArguments"]),
         .package(url: "https://github.com/tayloraswift/swift-png.git", from: "4.5.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
+        .package(path: "./swift-libpng"),
     ],
     targets: [
         .executableTarget(
@@ -26,7 +27,7 @@ let package = Package(
                 .product(name: "Configuration", package: "swift-configuration"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
-                .product(name: "PNG", package: "swift-png"),
+                .product(name: "LibPNG", package: "swift-libpng"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Sources/App"
