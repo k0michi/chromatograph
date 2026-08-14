@@ -22,16 +22,6 @@ private let reader = ConfigReader(providers: [
 @Suite
 struct AppTests {
   @Test
-  func hello() async throws {
-    let app = try await buildApplication(reader: reader)
-    try await app.test(.router) { client in
-      try await client.execute(uri: "/", method: .get) { response in
-        #expect(response.body == ByteBuffer(string: "Hello!"))
-      }
-    }
-  }
-
-  @Test
   func ws() async throws {
     let patch = try testPatch(operations: [.blend(testBlendOperation(chunk: .init(x: 0, y: 0)))])
     let packet = ByteBuffer(bytes: try PatchPacketCodec.encode(patch))

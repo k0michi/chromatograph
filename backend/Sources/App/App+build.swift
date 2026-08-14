@@ -74,14 +74,8 @@ private enum StorageConfigurationError: Error {
 /// Build router
 func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestContext> {
   let router = Router(context: AppRequestContext.self)
-  // Add middleware
   router.addMiddleware {
-    // logging middleware
     LogRequestsMiddleware(.info)
-  }
-  // Add default endpoint
-  router.get("/") { _, _ in
-    return "Hello!"
   }
   router.get("/api/chunks/:x/:y/replay") { request, context -> Response in
     guard
@@ -120,9 +114,7 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
 /// Build websocket router
 func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSRequestContext> {
   let router = Router(context: AppWSRequestContext.self)
-  // Add middleware
   router.addMiddleware {
-    // logging middleware
     LogRequestsMiddleware(.info)
   }
   router.ws("/ws") { _, _ in
