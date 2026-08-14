@@ -22,9 +22,6 @@ export function CursorInspectorPanel({ inspection }: CursorInspectorPanelProps) 
   return (
     <div
       style={{
-        position: "fixed",
-        right: 12,
-        bottom: 12,
         width: "min(20rem, calc(100vw - 24px))",
         boxSizing: "border-box",
         padding: 10,

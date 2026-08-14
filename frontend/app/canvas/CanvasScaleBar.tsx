@@ -30,12 +30,11 @@ export const CanvasScaleBar = forwardRef<CanvasScaleBarHandle>(function CanvasSc
   return (
     <div
       style={{
-        position: "fixed",
-        right: 16,
-        bottom: 112,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
+        alignSelf: "flex-end",
+        marginRight: 4,
         color: "white",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,

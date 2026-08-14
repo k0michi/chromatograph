@@ -317,8 +317,21 @@ export default function Index() {
         <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
-      <CanvasScaleBar ref={scaleBarRef} />
-      <CursorInspectorPanel inspection={cursorInspection} />
+      <div
+        style={{
+          position: "fixed",
+          right: 12,
+          bottom: 12,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 12,
+          pointerEvents: "none",
+        }}
+      >
+        <CanvasScaleBar ref={scaleBarRef} />
+        <CursorInspectorPanel inspection={cursorInspection} />
+      </div>
     </>
   );
 }
