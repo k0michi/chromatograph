@@ -12,8 +12,6 @@ enum OperationPacketCodecError: Error, Equatable {
 }
 
 enum OperationPacketCodec {
-    static let formatVersion: UInt32 = 1
-
     private static let blendOperation: UInt32 = 1
     private static let undoOperation: UInt32 = 2
     private static let sha256ByteCount = 32
@@ -24,7 +22,7 @@ enum OperationPacketCodec {
         }
 
         var writer = PacketWriter()
-        writer.append(formatVersion)
+        writer.append(packetVersion)
         writer.append(operationCount)
 
         for operation in operations {
@@ -53,7 +51,7 @@ enum OperationPacketCodec {
     static func decode(_ data: Data) throws -> [Operation] {
         var reader = PacketReader(data: data)
         let version = try reader.readUInt32()
-        guard version == formatVersion else {
+        guard version == packetVersion else {
             throw OperationPacketCodecError.invalidFormatVersion(version)
         }
 

@@ -1,11 +1,11 @@
 import { Hex } from "~/crypto/hex";
 import { BinaryReader } from "~/network/BinaryReader";
 import { BinaryWriter } from "~/network/BinaryWriter";
+import { PACKET_VERSION } from "~/network/PacketVersion";
 import { Patch } from "./Patch";
 import { OperationDecoder, OperationEncoder } from "./serializeOperations";
 
 export class PatchEncoder {
-  private static readonly formatVersion = 1;
   private static readonly publicKeyBytes = 32;
   private static readonly hashBytes = 32;
   private static readonly signatureBytes = 64;
@@ -16,7 +16,7 @@ export class PatchEncoder {
     const hash = this.fixedHex(patch.hash, this.hashBytes, "hash");
     const signature = this.fixedHex(patch.signatureHex, this.signatureBytes, "signature");
     const writer = new BinaryWriter();
-    writer.writeUInt32(this.formatVersion);
+    writer.writeUInt32(PACKET_VERSION);
     writer.writeUInt32(operations.length);
     writer.writeBytes(operations);
     writer.writeBytes(publicKey);
@@ -35,7 +35,6 @@ export class PatchEncoder {
 }
 
 export class PatchDecoder {
-  private static readonly formatVersion = 1;
   private static readonly publicKeyBytes = 32;
   private static readonly hashBytes = 32;
   private static readonly signatureBytes = 64;
@@ -44,7 +43,7 @@ export class PatchDecoder {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
     const reader = new BinaryReader(bytes);
     const version = reader.readUInt32();
-    if (version !== this.formatVersion) {
+    if (version !== PACKET_VERSION) {
       throw new Error(`Unsupported Patch packet version: ${version}.`);
     }
     const operations = OperationDecoder.operations(reader.readBytes(reader.readUInt32()));

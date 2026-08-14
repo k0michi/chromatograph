@@ -23,6 +23,8 @@ import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
 import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from "./Tile";
 import { PngCodec } from "./PngCodec";
+import type { ChunkSnapshotPacket } from "~/network/SnapshotPacket";
+import type { Client } from "~/network/Client";
 
 const BACKGROUND_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 const IMAGE_BINDING = 0;
@@ -63,13 +65,16 @@ export class CanvasRenderer {
 
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
-  private readonly knownPatchHashes = new Set<string>();
+  private readonly optimisticPatchHashes = new Set<string>();
+  private readonly replaySyncing = new Set<Tile>();
+  private readonly replayPending = new Map<Tile, string>();
+  private snapshotApplyChain: Promise<void> = Promise.resolve();
   private readonly canvasContentRenderedListeners = new Set<CanvasContentRenderedListener>();
   private readonly identity: Promise<Identity> = Identity.generate();
 
   constructor(
     canvas: HTMLCanvasElement,
-    private readonly publishPatch?: (patch: Patch) => void,
+    private readonly client: Client,
   ) {
     this.context = new Context(canvas);
     this.gl = this.context.gl;
@@ -236,27 +241,133 @@ export class CanvasRenderer {
 
   async commitPatch(operations: readonly BlendOperation[]): Promise<void> {
     const patch = await Patch.create(operations, await this.identity);
-    this.knownPatchHashes.add(patch.hash);
+    this.optimisticPatchHashes.add(patch.hash);
     const entries: HistoryRecord["entries"] = [];
+    const touchedTiles = new Set<Tile>();
 
     for (const operation of operations) {
       const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
       const entry = tile.addOperation(patch.hash, operation);
       entries.push({ tile, entry });
+      tile.headPatchHash = patch.hash;
+      touchedTiles.add(tile);
     }
-
-    for (const { tile } of entries) {
-      this.rebuildSnapshot(tile);
-    }
+    for (const tile of touchedTiles) this.rebuildSnapshot(tile);
 
     this.undoStack.push({ patch, entries, toggleHeadHash: patch.hash });
     this.redoStack.length = 0;
-    this.publishPatch?.(patch);
+    this.client.send(patch);
   }
 
   getChunkParents(x: number, y: number): string[] {
-    const entries = this.tiles.get(x, y)?.operationEntries;
-    return entries?.length ? [entries[entries.length - 1].patchHash] : [];
+    const tile = this.tiles.get(x, y);
+    const entries = tile?.operationEntries;
+    if (entries?.length) return [entries[entries.length - 1].patchHash];
+    return tile?.headPatchHash ? [tile.headPatchHash] : [];
+  }
+
+  activateChunk(x: number, y: number): void {
+    const tile = this.tiles.getOrCreate(x, y);
+    if (tile.isActive) return;
+    tile.isActive = true;
+    if (tile.headPatchHash) this.scheduleActiveChunkSync(tile, tile.headPatchHash);
+  }
+
+  applySnapshots(snapshots: readonly ChunkSnapshotPacket[]): Promise<void> {
+    const apply = this.snapshotApplyChain.then(() => this.applySnapshotsNow(snapshots));
+    this.snapshotApplyChain = apply.catch(() => {});
+    return apply;
+  }
+
+  private async applySnapshotsNow(snapshots: readonly ChunkSnapshotPacket[]): Promise<void> {
+    for (const update of snapshots) {
+      const tile = this.tiles.getOrCreate(update.chunk.x, update.chunk.y);
+      if (tile.isActive) {
+        continue;
+      }
+      const decoded = PngCodec.decodeRGBA(update.imageBytes, TILE_SIZE, TILE_SIZE);
+      const snapshot = this.createSnapshotFromRGBA(decoded.rgba);
+      this.disposeTileSnapshots(tile);
+      tile.snapshot = snapshot;
+      tile.baseSnapshot = snapshot;
+      tile.headPatchHash = update.headPatchHash;
+      tile.operationEntries.length = 0;
+      tile.containsEntireOperationOrder = false;
+    }
+  }
+
+  private scheduleActiveChunkSync(tile: Tile, fromHash: string): void {
+    if (this.replaySyncing.has(tile)) {
+      this.replayPending.set(tile, fromHash);
+      return;
+    }
+    this.replaySyncing.add(tile);
+    void this.syncActiveChunk(tile, fromHash).catch((error: unknown) => {
+      console.error(`Failed to lazy-sync chunk ${tile.x},${tile.y}:`, error);
+    }).finally(() => {
+      this.replaySyncing.delete(tile);
+      const pendingHash = this.replayPending.get(tile);
+      if (pendingHash) {
+        this.replayPending.delete(tile);
+        if (!tile.operationEntries.some((entry) => entry.patchHash === pendingHash)) {
+          this.scheduleActiveChunkSync(tile, pendingHash);
+        }
+      }
+    });
+  }
+
+  private async syncActiveChunk(tile: Tile, fromHash: string): Promise<void> {
+    const entriesAtStart = new Set(tile.operationEntries);
+    const entriesToPreserve = tile.operationEntries.filter((entry) =>
+      this.optimisticPatchHashes.has(entry.patchHash));
+    const replay = await this.client.fetchChunkReplay(tile.x, tile.y, fromHash);
+    for (const entry of tile.operationEntries) {
+      if (!entriesAtStart.has(entry)) entriesToPreserve.push(entry);
+    }
+    const decoded = PngCodec.decodeRGBA(replay.imageBytes, TILE_SIZE, TILE_SIZE);
+    const baseSnapshot = this.createSnapshotFromRGBA(decoded.rgba);
+    this.disposeTileSnapshots(tile);
+    tile.baseSnapshot = baseSnapshot;
+    tile.snapshot = baseSnapshot;
+    tile.operationEntries.length = 0;
+    tile.containsEntireOperationOrder = replay.containsEntireOrder;
+    const replayedHashes = new Set<string>();
+    for (const patch of replay.patches) {
+      const operation = patch.operations.find((candidate) =>
+        candidate.chunk.x === tile.x && candidate.chunk.y === tile.y);
+      if (operation) {
+        tile.addOperation(patch.hash, operation);
+        replayedHashes.add(patch.hash);
+      }
+    }
+    for (const entry of entriesToPreserve) {
+      if (!replayedHashes.has(entry.patchHash)) {
+        tile.addOperation(entry.patchHash, entry.op);
+        replayedHashes.add(entry.patchHash);
+      }
+    }
+    tile.headPatchHash = tile.operationEntries.at(-1)?.patchHash ?? tile.headPatchHash;
+    this.rebuildSnapshot(tile);
+  }
+
+  private disposeTileSnapshots(tile: Tile): void {
+    if (tile.snapshot && tile.snapshot !== tile.baseSnapshot) this.disposeSnapshot(tile.snapshot);
+    if (tile.baseSnapshot) this.disposeSnapshot(tile.baseSnapshot);
+    tile.snapshot = null;
+    tile.baseSnapshot = null;
+  }
+
+  private createSnapshotFromRGBA(rgba: Uint8Array<ArrayBuffer>): TileSnapshot {
+    const texture = this.device.createTexture({
+      source: { width: TILE_SIZE, height: TILE_SIZE, data: rgba },
+      minFilter: "nearest",
+      magFilter: "nearest",
+    });
+    return {
+      texture,
+      framebuffer: this.device.createFramebuffer({ colorAttachment: texture }),
+      bindGroup: this.createPatchBindGroup(texture),
+    };
   }
 
   get canUndo(): boolean {
@@ -273,10 +384,6 @@ export class CanvasRenderer {
   }
 
   applyPatch(patch: Patch): boolean {
-    if (this.knownPatchHashes.has(patch.hash)) {
-      return false;
-    }
-
     const chunks = new Set<string>();
     for (const operation of patch.operations) {
       const key = `${operation.chunk.x},${operation.chunk.y}`;
@@ -286,17 +393,29 @@ export class CanvasRenderer {
       chunks.add(key);
     }
 
-    this.knownPatchHashes.add(patch.hash);
-    const touchedTiles = new Set<Tile>();
+    this.optimisticPatchHashes.delete(patch.hash);
+    const replayTiles = new Set<Tile>();
+    let applied = false;
     for (const operation of patch.operations) {
       const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
+      if (!tile.isActive) continue;
+      const knownEntries = new Set(tile.operationEntries.map((entry) => entry.patchHash));
+      if (knownEntries.has(patch.hash)) continue;
+      const canApplyIncrementally = tile.containsEntireOperationOrder
+        || (operation.parents.length > 0 && operation.parents.every((parent) => knownEntries.has(parent)));
+      if (!canApplyIncrementally) {
+        replayTiles.add(tile);
+        continue;
+      }
       tile.addOperation(patch.hash, operation);
-      touchedTiles.add(tile);
-    }
-    for (const tile of touchedTiles) {
+      tile.headPatchHash = patch.hash;
       this.rebuildSnapshot(tile);
+      applied = true;
     }
-    return true;
+    for (const tile of replayTiles) {
+      this.scheduleActiveChunkSync(tile, patch.hash);
+    }
+    return applied || replayTiles.size > 0;
   }
 
   async undo(): Promise<void> {
@@ -310,18 +429,17 @@ export class CanvasRenderer {
       parents: [record.toggleHeadHash],
     }));
     const patch = await Patch.create(operations, await this.identity);
-    this.knownPatchHashes.add(patch.hash);
+    this.optimisticPatchHashes.add(patch.hash);
     record.toggleHeadHash = patch.hash;
-    const tiles = new Set<Tile>();
+    const touchedTiles = new Set<Tile>();
     for (const { tile } of record.entries) {
       tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
-      tiles.add(tile);
+      tile.headPatchHash = patch.hash;
+      touchedTiles.add(tile);
     }
-    for (const tile of tiles) {
-      this.rebuildSnapshot(tile);
-    }
+    for (const tile of touchedTiles) this.rebuildSnapshot(tile);
     this.redoStack.push(record);
-    this.publishPatch?.(patch);
+    this.client.send(patch);
   }
 
   async redo(): Promise<void> {
@@ -335,24 +453,33 @@ export class CanvasRenderer {
       parents: [record.toggleHeadHash],
     }));
     const patch = await Patch.create(operations, await this.identity);
-    this.knownPatchHashes.add(patch.hash);
+    this.optimisticPatchHashes.add(patch.hash);
     record.toggleHeadHash = patch.hash;
-    const tiles = new Set<Tile>();
+    const touchedTiles = new Set<Tile>();
     for (const { tile } of record.entries) {
       tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
-      tiles.add(tile);
+      tile.headPatchHash = patch.hash;
+      touchedTiles.add(tile);
     }
-    for (const tile of tiles) {
-      this.rebuildSnapshot(tile);
-    }
+    for (const tile of touchedTiles) this.rebuildSnapshot(tile);
     this.undoStack.push(record);
-    this.publishPatch?.(patch);
+    this.client.send(patch);
   }
 
   private rebuildSnapshot(tile: Tile): void {
     let rebuilt = this.createEmptySnapshot();
     let spare = this.createEmptySnapshot();
     try {
+      if (tile.baseSnapshot) {
+        const copyPass = this.context.beginRenderPass({
+          target: { framebuffer: rebuilt.framebuffer, width: TILE_SIZE, height: TILE_SIZE },
+        });
+        copyPass.setPipeline(this.copyPipeline);
+        copyPass.setVertexBuffer(0, this.quad.buffer);
+        copyPass.setUniformInt("uImage", IMAGE_BINDING);
+        this.drawQuad(copyPass, SNAPSHOT_MVP, tile.baseSnapshot.bindGroup, 1);
+        copyPass.end();
+      }
       for (const entry of tile.resolveActiveBlendEntries()) {
         this.paintOperationOntoSnapshot(rebuilt, spare, entry.op);
         [rebuilt, spare] = [spare, rebuilt];
@@ -363,7 +490,7 @@ export class CanvasRenderer {
       throw error;
     }
     this.disposeSnapshot(spare);
-    if (tile.snapshot) {
+    if (tile.snapshot && tile.snapshot !== tile.baseSnapshot) {
       this.disposeSnapshot(tile.snapshot);
     }
     tile.snapshot = rebuilt;
@@ -456,9 +583,7 @@ export class CanvasRenderer {
     this.straightCompositePipeline.dispose();
     this.gridPipeline.dispose();
     for (const tile of this.tiles) {
-      if (tile.snapshot) {
-        this.disposeSnapshot(tile.snapshot);
-      }
+      this.disposeTileSnapshots(tile);
     }
   }
 }

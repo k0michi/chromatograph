@@ -4,7 +4,7 @@ import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
-import { PatchWebSocketClient } from "~/network/PatchWebSocketClient";
+import { Client } from "~/network/Client";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import type { Route } from "./+types/_index";
 
@@ -48,16 +48,14 @@ export default function Index() {
       return;
     }
 
-    const wsURL = new URL("/ws", window.location.href);
-    wsURL.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const patchClient = new PatchWebSocketClient(wsURL.href, {
+    const client = new Client(window.location.href, {
       onError: (error) => console.error("Patch WebSocket error:", error),
     });
-    void patchClient.connect().catch((error: unknown) => {
+    void client.connect().catch((error: unknown) => {
       console.error("Failed to connect Patch WebSocket:", error);
     });
 
-    const renderer = new CanvasRenderer(canvas, (patch) => patchClient.send(patch));
+    const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
     let cursorInspectionPending = false;
     const unsubscribeCanvasContentRendered = renderer.onCanvasContentRendered(() => {
@@ -85,7 +83,12 @@ export default function Index() {
         cursorNeedsInspectionRef.current = false;
       }
     });
-    const unsubscribePatches = patchClient.subscribe((patch) => {
+    const unsubscribeSnapshots = client.subscribeSnapshots((snapshots) => {
+      void renderer.applySnapshots(snapshots).catch((error: unknown) => {
+        console.error("Failed to apply broadcast snapshots:", error);
+      });
+    });
+    const unsubscribePatches = client.subscribePatches((patch) => {
       try {
         renderer.applyPatch(patch);
       } catch (error) {
@@ -220,8 +223,9 @@ export default function Index() {
       brush.dispose();
       renderer.dispose();
       unsubscribePatches();
+      unsubscribeSnapshots();
       unsubscribeCanvasContentRendered();
-      patchClient.close();
+      client.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

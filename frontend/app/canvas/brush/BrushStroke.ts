@@ -132,6 +132,8 @@ export class BrushStroke {
       return existing;
     }
 
+    this.renderer.activateChunk(chunkX, chunkY);
+
     const snapshot = this.renderer.createEmptySnapshot();
     const accumulation: ChunkAccumulation = {
       chunkX,

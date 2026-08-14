@@ -11,8 +11,6 @@ enum PatchPacketCodecError: Error, Equatable {
 }
 
 enum PatchPacketCodec {
-    static let formatVersion: UInt32 = 1
-
     private static let publicKeyByteCount = 32
     private static let hashByteCount = 32
     private static let signatureByteCount = 64
@@ -39,7 +37,7 @@ enum PatchPacketCodec {
         )
 
         var writer = PatchPacketWriter()
-        writer.append(formatVersion)
+        writer.append(packetVersion)
         writer.append(operationsByteCount)
         writer.append(operations)
         writer.append(publicKey)
@@ -51,7 +49,7 @@ enum PatchPacketCodec {
     static func decode(_ data: Data) throws -> Patch {
         var reader = PatchPacketReader(data: data)
         let version = try reader.readUInt32()
-        guard version == formatVersion else {
+        guard version == packetVersion else {
             throw PatchPacketCodecError.invalidFormatVersion(version)
         }
         let operationsByteCount = try reader.readCount()

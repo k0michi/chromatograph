@@ -16,7 +16,7 @@ struct PatchPacketCodecTests {
         let encoded = try PatchPacketCodec.encode(patch)
 
         #expect(try PatchPacketCodec.decode(encoded) == patch)
-        #expect(encoded.prefix(8) == Data([0, 0, 0, 1, 0, 0, 0, 24]))
+        #expect(encoded.prefix(8) == Data([0, 0, 0, 0, 0, 0, 0, 24]))
     }
 
     @Test

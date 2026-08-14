@@ -1,10 +1,10 @@
 import { Hex } from "~/crypto/hex";
 import { BinaryReader } from "~/network/BinaryReader";
 import { BinaryWriter } from "~/network/BinaryWriter";
+import { PACKET_VERSION } from "~/network/PacketVersion";
 import { BlendMode, CompositeOp, type BlendOperation, type Operation, type UndoOperation } from "./Operation";
 
 export class OperationEncoder {
-  private static readonly formatVersion = 1;
   private static readonly blendOperation = 1;
   private static readonly undoOperation = 2;
   private static readonly sha256Bytes = 32;
@@ -51,7 +51,7 @@ export class OperationEncoder {
 
   static operations(operations: readonly Operation[]): Uint8Array<ArrayBuffer> {
     const writer = new BinaryWriter();
-    writer.writeUInt32(this.formatVersion);
+    writer.writeUInt32(PACKET_VERSION);
     writer.writeUInt32(operations.length);
     for (const operation of operations) {
       writer.writeBytes(operation.type === "blend" ? this.blend(operation) : this.undo(operation));
@@ -61,7 +61,6 @@ export class OperationEncoder {
 }
 
 export class OperationDecoder {
-  private static readonly formatVersion = 1;
   private static readonly blendOperation = 1;
   private static readonly undoOperation = 2;
   private static readonly sha256Bytes = 32;
@@ -70,7 +69,7 @@ export class OperationDecoder {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
     const reader = new BinaryReader(bytes);
     const version = reader.readUInt32();
-    if (version !== this.formatVersion) {
+    if (version !== PACKET_VERSION) {
       throw new Error(`Unsupported operation packet version: ${version}.`);
     }
 

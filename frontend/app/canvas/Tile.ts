@@ -19,6 +19,10 @@ export interface TileOperationEntry {
 export class Tile {
   readonly operationEntries: TileOperationEntry[] = [];
   snapshot: TileSnapshot | null = null;
+  baseSnapshot: TileSnapshot | null = null;
+  headPatchHash: string | null = null;
+  containsEntireOperationOrder = false;
+  isActive = false;
 
   constructor(
     readonly x: number,

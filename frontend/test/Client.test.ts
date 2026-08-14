@@ -3,7 +3,9 @@ import { BlendMode, CompositeOp, type Operation } from "../app/canvas/Operation"
 import { Patch } from "../app/canvas/Patch";
 import { PatchDecoder, PatchEncoder } from "../app/canvas/serializePatch";
 import { OperationDecoder, OperationEncoder } from "../app/canvas/serializeOperations";
-import { PatchWebSocketClient } from "../app/network/PatchWebSocketClient";
+import { BinaryWriter } from "../app/network/BinaryWriter";
+import { Client } from "../app/network/Client";
+import { PACKET_VERSION } from "../app/network/PacketVersion";
 
 const operations: readonly Operation[] = [
   {
@@ -36,14 +38,14 @@ describe("OperationDecoder", () => {
   });
 });
 
-describe("PatchWebSocketClient", () => {
-  it("connects, sends a patch, and decodes a broadcast", async () => {
+describe("Client", () => {
+  it("connects, sends a Patch, and decodes a snapshot broadcast", async () => {
     const socket = new MockWebSocket();
     const listener = vi.fn();
-    const client = new PatchWebSocketClient("ws://example.test/ws", {
+    const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
     });
-    client.subscribe(listener);
+    client.subscribeSnapshots(listener);
 
     const connecting = client.connect();
     socket.open();
@@ -53,19 +55,24 @@ describe("PatchWebSocketClient", () => {
     client.send(patch);
     expect(socket.sent[0]).toEqual(PatchEncoder.encode(patch));
 
-    socket.receive(PatchEncoder.encode(patch).buffer);
-    expect(listener).toHaveBeenCalledWith(patch);
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    socket.receive(broadcastPacket(2, snapshotPacket(12, -5, patch.hash, imageBytes)).buffer);
+    expect(listener).toHaveBeenCalledWith([{
+      chunk: { x: 12, y: -5 },
+      headPatchHash: patch.hash,
+      imageBytes,
+    }]);
   });
 
   it("reports invalid messages without notifying subscribers", async () => {
     const socket = new MockWebSocket();
     const onError = vi.fn();
     const listener = vi.fn();
-    const client = new PatchWebSocketClient("ws://example.test/ws", {
+    const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
       onError,
     });
-    client.subscribe(listener);
+    client.subscribeSnapshots(listener);
     const connecting = client.connect();
     socket.open();
     await connecting;
@@ -77,7 +84,7 @@ describe("PatchWebSocketClient", () => {
 
   it("queues patches while connecting", async () => {
     const socket = new MockWebSocket();
-    const client = new PatchWebSocketClient("ws://example.test/ws", {
+    const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
     });
     const connecting = client.connect();
@@ -87,6 +94,27 @@ describe("PatchWebSocketClient", () => {
     socket.open();
     await connecting;
     expect(socket.sent).toHaveLength(1);
+  });
+
+  it("fetches and decodes a chunk replay over HTTPS", async () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71]);
+    const packet = chunkReplayPacket(imageBytes, [patch]);
+    const request = vi.fn(async (_url: URL) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => packet.buffer,
+    }) as Response);
+    const client = new Client("wss://example.test/ws", { fetch: request });
+
+    await expect(client.fetchChunkReplay(12, -5, patch.hash)).resolves.toEqual({
+      containsEntireOrder: true,
+      imageBytes,
+      patches: [patch],
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]![0].href).toBe(
+      `https://example.test/api/chunks/12/-5/replay?from=${patch.hash}`,
+    );
   });
 });
 
@@ -128,4 +156,55 @@ class MockWebSocket {
     this.readyState = 3;
     this.onclose?.({ code } as CloseEvent);
   }
+}
+
+function snapshotPacket(
+  x: number,
+  y: number,
+  hash: string,
+  imageBytes: Uint8Array,
+): Uint8Array<ArrayBuffer> {
+  const packet = new Uint8Array(8 + 4 + 4 + 32 + 4 + imageBytes.length);
+  const view = new DataView(packet.buffer);
+  view.setUint32(0, PACKET_VERSION, false);
+  view.setUint32(4, 1, false);
+  view.setInt32(8, x, false);
+  view.setInt32(12, y, false);
+  for (let index = 0; index < 32; index++) {
+    packet[16 + index] = Number.parseInt(hash.slice(index * 2, index * 2 + 2), 16);
+  }
+  view.setUint32(48, imageBytes.length, false);
+  packet.set(imageBytes, 52);
+  return packet;
+}
+
+function broadcastPacket(kind: number, payload: Uint8Array): Uint8Array<ArrayBuffer> {
+  const packet = new Uint8Array(4 + payload.length);
+  new DataView(packet.buffer).setUint32(0, kind, false);
+  packet.set(payload, 4);
+  return packet;
+}
+
+function chunkReplayPacket(
+  imageBytes: Uint8Array<ArrayBuffer>,
+  patches: readonly Patch[],
+): Uint8Array<ArrayBuffer> {
+  const patchSequence = new BinaryWriter();
+  patchSequence.writeUInt32(PACKET_VERSION);
+  patchSequence.writeUInt32(patches.length);
+  for (const value of patches) {
+    const encoded = PatchEncoder.encode(value);
+    patchSequence.writeUInt32(encoded.length);
+    patchSequence.writeBytes(encoded);
+  }
+  const patchSequenceBytes = patchSequence.toBytes();
+
+  const replay = new BinaryWriter();
+  replay.writeUInt32(PACKET_VERSION);
+  replay.writeUInt32(1);
+  replay.writeUInt32(imageBytes.length);
+  replay.writeBytes(imageBytes);
+  replay.writeUInt32(patchSequenceBytes.length);
+  replay.writeBytes(patchSequenceBytes);
+  return replay.toBytes();
 }
