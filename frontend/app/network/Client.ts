@@ -110,7 +110,10 @@ export class Client implements Disposable {
       body: JSON.stringify({ chunks }),
     });
     if (!response.ok) throw new Error(`Snapshot fetch failed (${response.status}).`);
-    return SnapshotPacketDecoder.decode(await response.arrayBuffer());
+    return SnapshotPacketDecoder.decode(await response.arrayBuffer()).map((snapshot) => ({
+      ...snapshot,
+      imageBytes: snapshot.imageBytes.slice(),
+    }));
   }
 
   subscribeSnapshots(listener: SnapshotListener): () => void {

@@ -23,6 +23,7 @@ import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
 import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from "./Tile";
 import { PngCodec } from "./PngCodec";
+import { decodePngInWorker } from "./PngDecoderWorker";
 import type { ChunkSnapshotPacket } from "~/network/SnapshotPacket";
 import type { Client } from "~/network/Client";
 import {
@@ -81,6 +82,7 @@ export class CanvasRenderer {
   private viewport: ChunkViewport | null = null;
   private readonly knownChunks = new Map<string, ChunkCoordinate>();
   private readonly pendingChunks = new Set<string>();
+  private readonly snapshotVersions = new Map<string, number>();
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -284,6 +286,10 @@ export class CanvasRenderer {
   }
 
   applySnapshots(snapshots: readonly ChunkSnapshotPacket[]): Promise<void> {
+    for (const snapshot of snapshots) {
+      const key = this.chunkKey(snapshot.chunk.x, snapshot.chunk.y);
+      this.snapshotVersions.set(key, (this.snapshotVersions.get(key) ?? 0) + 1);
+    }
     const apply = this.snapshotApplyChain.then(() => this.applySnapshotsNow(snapshots));
     this.snapshotApplyChain = apply.catch(() => {});
     return apply;
@@ -297,8 +303,9 @@ export class CanvasRenderer {
       if (tile.isActive) {
         continue;
       }
-      const decoded = PngCodec.decodeRGBA(update.imageBytes, TILE_SIZE, TILE_SIZE);
-      const snapshot = this.createSnapshotFromRGBA(decoded.rgba);
+      const rgba = await decodePngInWorker(update.imageBytes, TILE_SIZE, TILE_SIZE);
+      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) continue;
+      const snapshot = this.createSnapshotFromRGBA(rgba);
       this.disposeTileSnapshots(tile);
       tile.snapshot = snapshot;
       tile.baseSnapshot = snapshot;
@@ -336,8 +343,8 @@ export class CanvasRenderer {
     for (const entry of tile.operationEntries) {
       if (!entriesAtStart.has(entry)) entriesToPreserve.push(entry);
     }
-    const decoded = PngCodec.decodeRGBA(replay.imageBytes, TILE_SIZE, TILE_SIZE);
-    const baseSnapshot = this.createSnapshotFromRGBA(decoded.rgba);
+    const rgba = await decodePngInWorker(replay.imageBytes, TILE_SIZE, TILE_SIZE);
+    const baseSnapshot = this.createSnapshotFromRGBA(rgba);
     this.disposeTileSnapshots(tile);
     tile.baseSnapshot = baseSnapshot;
     tile.snapshot = baseSnapshot;
@@ -613,8 +620,11 @@ export class CanvasRenderer {
     });
     if (missingChunks.length === 0) return;
     for (const chunk of missingChunks) this.pendingChunks.add(this.chunkKey(chunk.x, chunk.y));
-    const headsBeforeFetch = new Map(
-      missingChunks.map(({ x, y }) => [`${x},${y}`, this.tiles.get(x, y)?.headPatchHash ?? null]),
+    const versionsBeforeFetch = new Map(
+      missingChunks.map(({ x, y }) => {
+        const key = this.chunkKey(x, y);
+        return [key, this.snapshotVersions.get(key) ?? 0];
+      }),
     );
     try {
       const snapshots = await this.client.fetchSnapshots(missingChunks);
@@ -627,9 +637,8 @@ export class CanvasRenderer {
         }
       }
       const unchangedSnapshots = snapshots.filter((snapshot) => {
-        const tile = this.tiles.get(snapshot.chunk.x, snapshot.chunk.y);
-        return (tile?.headPatchHash ?? null)
-          === (headsBeforeFetch.get(`${snapshot.chunk.x},${snapshot.chunk.y}`) ?? null);
+        const key = this.chunkKey(snapshot.chunk.x, snapshot.chunk.y);
+        return (this.snapshotVersions.get(key) ?? 0) === versionsBeforeFetch.get(key);
       });
       await this.applySnapshots(unchangedSnapshots);
     } catch (error) {
