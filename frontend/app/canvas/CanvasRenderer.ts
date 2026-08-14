@@ -16,7 +16,7 @@ import {
   STRAIGHT_COMPOSITE_FRAGMENT_SHADER,
   TILE_GRID_FRAGMENT_SHADER,
 } from "./CanvasShaders";
-import { CHUNK_VIEW_PROJECTION } from "./chunkSpace";
+import { CHUNK_VIEW_PROJECTION, worldToChunkPosition } from "./chunkSpace";
 import type { BlendOperation, UndoOperation } from "./Operation";
 import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
@@ -648,14 +648,11 @@ export class CanvasRenderer {
   }
 
   readSnapshotRgba(worldX: number, worldY: number): Promise<[number, number, number, number]> {
-    const chunkX = Math.floor(worldX / TILE_SIZE);
-    const chunkY = Math.floor(worldY / TILE_SIZE);
+    const { chunkX, chunkY, subchunkX, subchunkY } = worldToChunkPosition(worldX, worldY);
     const snapshot = this.tiles.get(chunkX, chunkY)?.snapshot;
     if (!snapshot) return Promise.resolve([0, 0, 0, 0]);
 
-    const localX = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldX - chunkX * TILE_SIZE)));
-    const localY = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(worldY - chunkY * TILE_SIZE)));
-    return snapshot.framebuffer.readRgba8PixelAsync(localX, localY);
+    return snapshot.framebuffer.readRgba8PixelAsync(subchunkX, subchunkY);
   }
 
   dispose(): void {

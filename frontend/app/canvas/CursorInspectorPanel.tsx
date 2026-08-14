@@ -1,3 +1,5 @@
+import { worldToChunkPosition } from "./chunkSpace";
+
 export interface CursorInspection {
   readonly screenX: number;
   readonly screenY: number;
@@ -12,6 +14,9 @@ export interface CursorInspectorPanelProps {
 
 export function CursorInspectorPanel({ inspection }: CursorInspectorPanelProps) {
   const rgba = inspection?.rgba;
+  const position = inspection
+    ? worldToChunkPosition(inspection.worldX, inspection.worldY)
+    : null;
   const swatch = rgba ? `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${rgba[3] / 255})` : "transparent";
 
   return (
@@ -38,6 +43,8 @@ export function CursorInspectorPanel({ inspection }: CursorInspectorPanelProps) 
           <div>
             <div>Screen: {inspection.screenX.toFixed(2)}, {inspection.screenY.toFixed(2)}</div>
             <div>World: {inspection.worldX.toFixed(3)}, {inspection.worldY.toFixed(3)}</div>
+            <div>Chunk: {position?.chunkX}, {position?.chunkY}</div>
+            <div>Subchunk: {position?.subchunkX}, {position?.subchunkY}</div>
             <div>RGBA8: {rgba.join(", ")}</div>
             <div>
               RGBA: {rgba.map((channel) => (channel / 255).toFixed(4)).join(", ")}
