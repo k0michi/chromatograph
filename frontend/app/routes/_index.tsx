@@ -3,6 +3,7 @@ import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
+import { CanvasScaleBar, type CanvasScaleBarHandle } from "~/canvas/CanvasScaleBar";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { Client } from "~/network/Client";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
@@ -17,6 +18,7 @@ export default function Index() {
   const brushRef = useRef<Brush | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
+  const scaleBarRef = useRef<CanvasScaleBarHandle>(null);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
 
@@ -110,6 +112,7 @@ export default function Index() {
     let animationFrame = requestAnimationFrame(function loop(timestamp) {
       const renderStart = performance.now();
       renderer.render();
+      scaleBarRef.current?.update(renderer.camera.zoom);
       profilerRef.current?.sample(timestamp, performance.now() - renderStart);
       animationFrame = requestAnimationFrame(loop);
     });
@@ -314,6 +317,7 @@ export default function Index() {
         <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
+      <CanvasScaleBar ref={scaleBarRef} />
       <CursorInspectorPanel inspection={cursorInspection} />
     </>
   );
