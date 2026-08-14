@@ -81,7 +81,6 @@ export class CanvasRenderer {
   private readonly identity: Promise<Identity> = Identity.generate();
   private viewport: ChunkViewport | null = null;
   private readonly knownChunks = new Map<string, ChunkCoordinate>();
-  private readonly pendingChunks = new Set<string>();
   private readonly snapshotVersions = new Map<string, number>();
 
   constructor(
@@ -615,11 +614,9 @@ export class CanvasRenderer {
     const missingChunks = chunksInViewport(viewport).filter(({ x, y }) => {
       const key = this.chunkKey(x, y);
       return !this.tiles.get(x, y)?.snapshot
-        && !this.knownChunks.has(key)
-        && !this.pendingChunks.has(key);
+        && !this.knownChunks.has(key);
     });
     if (missingChunks.length === 0) return;
-    for (const chunk of missingChunks) this.pendingChunks.add(this.chunkKey(chunk.x, chunk.y));
     const versionsBeforeFetch = new Map(
       missingChunks.map(({ x, y }) => {
         const key = this.chunkKey(x, y);
@@ -643,8 +640,6 @@ export class CanvasRenderer {
       await this.applySnapshots(unchangedSnapshots);
     } catch (error) {
       console.error("Failed to fetch visible snapshots:", error);
-    } finally {
-      for (const chunk of missingChunks) this.pendingChunks.delete(this.chunkKey(chunk.x, chunk.y));
     }
   }
 

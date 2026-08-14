@@ -25,6 +25,7 @@ export class Client implements Disposable {
   private connectPromise: Promise<void> | null = null;
   private readonly pendingPackets: Uint8Array<ArrayBuffer>[] = [];
   private viewport: ChunkViewport | null = null;
+  private readonly inflightSnapshots = new Map<string, Promise<ChunkSnapshotPacket | null>>();
 
   constructor(
     private readonly baseURL: string | URL,
@@ -101,7 +102,31 @@ export class Client implements Disposable {
   }
 
   async fetchSnapshots(chunks: readonly ChunkCoordinate[]): Promise<readonly ChunkSnapshotPacket[]> {
-    if (chunks.length === 0) return [];
+    const uniqueChunks = new Map(chunks.map((chunk) => [this.chunkKey(chunk), chunk]));
+    const newChunks = [...uniqueChunks].filter(([key]) => !this.inflightSnapshots.has(key));
+    if (newChunks.length > 0) {
+      const batch = this.requestSnapshots(newChunks.map(([, chunk]) => chunk));
+      for (const [key] of newChunks) {
+        let tracked: Promise<ChunkSnapshotPacket | null>;
+        tracked = batch
+          .then((snapshots) => snapshots.get(key) ?? null)
+          .finally(() => {
+            if (this.inflightSnapshots.get(key) === tracked) this.inflightSnapshots.delete(key);
+          });
+        this.inflightSnapshots.set(key, tracked);
+      }
+    }
+    const snapshots = await Promise.all(
+      [...uniqueChunks.keys()].map((key) => this.inflightSnapshots.get(key)!),
+    );
+    return snapshots
+      .filter((snapshot): snapshot is ChunkSnapshotPacket => snapshot !== null)
+      .map((snapshot) => ({ ...snapshot, imageBytes: snapshot.imageBytes.slice() }));
+  }
+
+  private async requestSnapshots(
+    chunks: readonly ChunkCoordinate[],
+  ): Promise<ReadonlyMap<string, ChunkSnapshotPacket>> {
     const url = this.url("/api/snapshots", "http");
     const request = this.options.fetch ?? ((input: URL, init?: RequestInit) => fetch(input, init));
     const response = await request(url, {
@@ -110,9 +135,9 @@ export class Client implements Disposable {
       body: JSON.stringify({ chunks }),
     });
     if (!response.ok) throw new Error(`Snapshot fetch failed (${response.status}).`);
-    return SnapshotPacketDecoder.decode(await response.arrayBuffer()).map((snapshot) => ({
-      ...snapshot,
-      imageBytes: snapshot.imageBytes.slice(),
+    return new Map(SnapshotPacketDecoder.decode(await response.arrayBuffer()).map((snapshot) => {
+      const detached = { ...snapshot, imageBytes: snapshot.imageBytes.slice() };
+      return [this.chunkKey(snapshot.chunk), detached];
     }));
   }
 
@@ -148,6 +173,10 @@ export class Client implements Disposable {
       url.protocol = url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:";
     }
     return url;
+  }
+
+  private chunkKey(chunk: ChunkCoordinate): string {
+    return `${chunk.x},${chunk.y}`;
   }
 
   private receive(data: unknown): void {

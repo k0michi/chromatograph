@@ -158,6 +158,30 @@ describe("Client", () => {
       body: JSON.stringify({ chunks: [{ x: 12, y: -5 }] }),
     });
   });
+
+  it("shares in-flight snapshot requests for the same chunk", async () => {
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    const packet = snapshotPacket(12, -5, patch.hash, imageBytes);
+    let completeRequest!: (response: Response) => void;
+    const request = vi.fn((_url: URL, _init?: RequestInit) => new Promise<Response>((resolve) => {
+      completeRequest = resolve;
+    }));
+    const client = new Client("https://example.test", { fetch: request });
+
+    const first = client.fetchSnapshots([{ x: 12, y: -5 }]);
+    const second = client.fetchSnapshots([{ x: 12, y: -5 }]);
+    expect(request).toHaveBeenCalledOnce();
+
+    completeRequest({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => packet.buffer,
+    } as Response);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      [{ chunk: { x: 12, y: -5 }, headPatchHash: patch.hash, imageBytes }],
+      [{ chunk: { x: 12, y: -5 }, headPatchHash: patch.hash, imageBytes }],
+    ]);
+  });
 });
 
 describe("Patch packet codec", () => {
