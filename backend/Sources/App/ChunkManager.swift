@@ -22,10 +22,17 @@ actor ChunkManager {
   private var snapshots: [TileChunkKey: [UInt8]] = [:]
   private var committedHashes: Set<String> = []
   private var patchesByHash: [String: Patch] = [:]
+  private let store: any ChunkStore
+  private var isLoaded = false
+
+  init(store: any ChunkStore = MemoryChunkStore()) {
+    self.store = store
+  }
 
   /// Validates and applies every operation in a patch as one transaction.
   /// No DAG or snapshot state is changed unless all affected chunks render successfully.
   func apply(_ patch: Patch) throws -> [ChunkSnapshot] {
+    try loadIfNeeded()
     guard !committedHashes.contains(patch.hash) else {
       throw ChunkManagerError.duplicatePatch(patch.hash)
     }
@@ -43,16 +50,11 @@ actor ChunkManager {
     for key in touched {
       candidateSnapshots[key] = try render(candidateEntries[key] ?? [])
     }
-    entriesByChunk = candidateEntries
-    for (key, snapshot) in candidateSnapshots {
-      snapshots[key] = snapshot
-    }
-    committedHashes.insert(patch.hash)
-    patchesByHash[patch.hash] = patch
-    return try touched.sorted().map { key in
-      ChunkSnapshot(
+    let encodedSnapshots = try touched.sorted().map { key in
+      let head = try linearize(candidateEntries[key] ?? []).last?.patchHash ?? patch.hash
+      return ChunkSnapshot(
         chunk: TileChunk(x: key.x, y: key.y),
-        headPatchHash: patch.hash,
+        headPatchHash: head,
         imageBytes: try PNGCodec.encodeRGBA8(
           candidateSnapshots[key]!,
           width: Self.tileSize,
@@ -60,6 +62,14 @@ actor ChunkManager {
         )
       )
     }
+    try store.commit(patch: patch, snapshots: encodedSnapshots)
+    entriesByChunk = candidateEntries
+    for (key, snapshot) in candidateSnapshots {
+      snapshots[key] = snapshot
+    }
+    committedHashes.insert(patch.hash)
+    patchesByHash[patch.hash] = patch
+    return encodedSnapshots
   }
 
   func snapshot(x: Int32, y: Int32) -> [UInt8]? {
@@ -69,6 +79,7 @@ actor ChunkManager {
   /// Returns a client-side replay base and every partial Patch after that base.
   /// Undo requires replaying from its target Blend, because Undo has no pixel payload.
   func replay(x: Int32, y: Int32, from patchHash: String) throws -> ChunkReplay {
+    try loadIfNeeded()
     let chunk = TileChunk(x: x, y: y)
     let entries = entriesByChunk[TileChunkKey(x: x, y: y)] ?? []
     let ordered = try linearize(entries)
@@ -116,6 +127,46 @@ actor ChunkManager {
       imageBytes: try PNGCodec.encodeRGBA8(base, width: Self.tileSize, height: Self.tileSize),
       patches: patches
     )
+  }
+
+  func latestSnapshots(for chunks: [TileChunk]) throws -> [ChunkSnapshot] {
+    try loadIfNeeded()
+    return try Set(chunks.map(TileChunkKey.init)).sorted().compactMap { key in
+      guard let rgba = snapshots[key], let entries = entriesByChunk[key] else { return nil }
+      guard let head = try linearize(entries).last?.patchHash else { return nil }
+      return ChunkSnapshot(
+        chunk: .init(x: key.x, y: key.y),
+        headPatchHash: head,
+        imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
+      )
+    }
+  }
+
+  private func loadIfNeeded() throws {
+    guard !isLoaded else { return }
+    let state = try store.load()
+    var restoredEntries: [TileChunkKey: [Entry]] = [:]
+    for patch in state.patches {
+      for operation in patch.operations {
+        restoredEntries[TileChunkKey(operation.chunk), default: []].append(
+          Entry(patchHash: patch.hash, operation: operation)
+        )
+      }
+      committedHashes.insert(patch.hash)
+      patchesByHash[patch.hash] = patch
+    }
+    var restoredSnapshots: [TileChunkKey: [UInt8]] = [:]
+    for (key, entries) in restoredEntries {
+      let head = try linearize(entries).last?.patchHash
+      if let head, let snapshot = try store.snapshot(x: key.x, y: key.y, headPatchHash: head) {
+        restoredSnapshots[key] = try PNGCodec.decode(snapshot).rgba
+      } else {
+        restoredSnapshots[key] = try render(entries)
+      }
+    }
+    entriesByChunk = restoredEntries
+    snapshots = restoredSnapshots
+    isLoaded = true
   }
 
   private func validate(_ patch: Patch) throws {

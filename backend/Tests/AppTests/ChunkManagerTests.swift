@@ -246,6 +246,47 @@ struct ChunkManagerTests {
         ))
     }
   }
+
+  @Test
+  func fileSystemStoreRestoresPatchesAndSnapshotsFromSeparateDirectories() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(
+      path: "chromatograph-store-\(UUID().uuidString)",
+      directoryHint: .isDirectory
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let metadata = root.appending(path: "metadata", directoryHint: .isDirectory)
+    let snapshotCache = root.appending(path: "snapshots", directoryHint: .isDirectory)
+    let store = try FileSystemChunkStore(
+      metadataDirectory: metadata,
+      snapshotDirectory: snapshotCache
+    )
+    let patchHash = hash("10")
+    let firstManager = ChunkManager(store: store)
+    try await firstManager.apply(
+      patch(hash: patchHash, operation: .blend(try blendOperation(color: .init(255, 0, 0, 255))))
+    )
+
+    let restoredManager = ChunkManager(store: try FileSystemChunkStore(
+      metadataDirectory: metadata,
+      snapshotDirectory: snapshotCache
+    ))
+    let restored = try await restoredManager.latestSnapshots(for: [.init(x: 0, y: 0)])
+    #expect(restored.count == 1)
+    #expect(restored[0].headPatchHash == patchHash)
+    #expect(try PNGCodec.decode(restored[0].imageBytes).rgba.prefix(4) == [255, 0, 0, 255])
+    let patchFile = metadata.appending(path: "patches/\(patchHash).patch")
+    let snapshotFile = snapshotCache.appending(path: "0/0/\(patchHash).png")
+    #expect(FileManager.default.fileExists(atPath: patchFile.path))
+    #expect(FileManager.default.fileExists(atPath: snapshotFile.path))
+
+    try FileManager.default.removeItem(at: snapshotFile)
+    let managerWithoutCache = ChunkManager(store: try FileSystemChunkStore(
+      metadataDirectory: metadata,
+      snapshotDirectory: snapshotCache
+    ))
+    let recomputed = try await managerWithoutCache.latestSnapshots(for: [.init(x: 0, y: 0)])
+    #expect(try PNGCodec.decode(recomputed[0].imageBytes).rgba.prefix(4) == [255, 0, 0, 255])
+  }
 }
 
 private func hash(_ byte: String) -> String { String(repeating: byte, count: 32) }

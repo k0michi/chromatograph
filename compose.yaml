@@ -12,6 +12,9 @@ services:
     restart: unless-stopped
     expose:
       - "8080"
+    volumes:
+      - backend-data:/var/lib/chromatograph
+      - backend-snapshots:/var/lib/chromatograph-snapshots
 
   nginx:
     image: nginx:1.27-alpine
@@ -23,3 +26,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  backend-data:
+  backend-snapshots:
