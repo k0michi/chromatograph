@@ -25,6 +25,13 @@ import { TILE_SIZE, type Tile, type TileOperationEntry, type TileSnapshot } from
 import { PngCodec } from "./PngCodec";
 import type { ChunkSnapshotPacket } from "~/network/SnapshotPacket";
 import type { Client } from "~/network/Client";
+import {
+  chunksInViewport,
+  containsChunk,
+  sameChunkViewport,
+  type ChunkCoordinate,
+  type ChunkViewport,
+} from "~/network/ChunkViewport";
 
 const BACKGROUND_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 const IMAGE_BINDING = 0;
@@ -71,6 +78,9 @@ export class CanvasRenderer {
   private snapshotApplyChain: Promise<void> = Promise.resolve();
   private readonly canvasContentRenderedListeners = new Set<CanvasContentRenderedListener>();
   private readonly identity: Promise<Identity> = Identity.generate();
+  private viewport: ChunkViewport | null = null;
+  private readonly knownChunks = new Map<string, ChunkCoordinate>();
+  private readonly pendingChunks = new Set<string>();
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -281,6 +291,8 @@ export class CanvasRenderer {
 
   private async applySnapshotsNow(snapshots: readonly ChunkSnapshotPacket[]): Promise<void> {
     for (const update of snapshots) {
+      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) continue;
+      this.knownChunks.set(this.chunkKey(update.chunk.x, update.chunk.y), update.chunk);
       const tile = this.tiles.getOrCreate(update.chunk.x, update.chunk.y);
       if (tile.isActive) {
         continue;
@@ -397,7 +409,9 @@ export class CanvasRenderer {
     const replayTiles = new Set<Tile>();
     let applied = false;
     for (const operation of patch.operations) {
-      const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
+      if (!this.viewport || !containsChunk(this.viewport, operation.chunk.x, operation.chunk.y)) continue;
+      const tile = this.tiles.get(operation.chunk.x, operation.chunk.y);
+      if (!tile) continue;
       if (!tile.isActive) continue;
       const knownEntries = new Set(tile.operationEntries.map((entry) => entry.patchHash));
       if (knownEntries.has(patch.hash)) continue;
@@ -498,6 +512,7 @@ export class CanvasRenderer {
 
   render(): void {
     this.resize();
+    this.updateViewport();
 
     const pass = this.beginPass(undefined, BACKGROUND_COLOR);
 
@@ -563,6 +578,69 @@ export class CanvasRenderer {
     if (this.context.resize()) {
       this.camera.resize(this.context.canvas.clientWidth, this.context.canvas.clientHeight);
     }
+  }
+
+  private updateViewport(): void {
+    const bounds = this.camera.visibleWorldBounds();
+    const viewport: ChunkViewport = {
+      minX: Math.floor(bounds.minX / TILE_SIZE),
+      minY: Math.floor(bounds.minY / TILE_SIZE),
+      maxX: Math.ceil(bounds.maxX / TILE_SIZE) - 1,
+      maxY: Math.ceil(bounds.maxY / TILE_SIZE) - 1,
+    };
+    if (sameChunkViewport(this.viewport, viewport)) return;
+    this.viewport = viewport;
+    this.client.setViewport(viewport);
+    for (const tile of [...this.tiles]) {
+      if (tile.isActive || containsChunk(viewport, tile.x, tile.y)) continue;
+      this.disposeTileSnapshots(tile);
+      this.tiles.delete(tile);
+    }
+    for (const [key, chunk] of this.knownChunks) {
+      if (!containsChunk(viewport, chunk.x, chunk.y) && !this.tiles.get(chunk.x, chunk.y)?.isActive) {
+        this.knownChunks.delete(key);
+      }
+    }
+    void this.fetchVisibleSnapshots(viewport);
+  }
+
+  private async fetchVisibleSnapshots(viewport: ChunkViewport): Promise<void> {
+    const missingChunks = chunksInViewport(viewport).filter(({ x, y }) => {
+      const key = this.chunkKey(x, y);
+      return !this.tiles.get(x, y)?.snapshot
+        && !this.knownChunks.has(key)
+        && !this.pendingChunks.has(key);
+    });
+    if (missingChunks.length === 0) return;
+    for (const chunk of missingChunks) this.pendingChunks.add(this.chunkKey(chunk.x, chunk.y));
+    const headsBeforeFetch = new Map(
+      missingChunks.map(({ x, y }) => [`${x},${y}`, this.tiles.get(x, y)?.headPatchHash ?? null]),
+    );
+    try {
+      const snapshots = await this.client.fetchSnapshots(missingChunks);
+      const currentViewport = this.viewport;
+      if (currentViewport) {
+        for (const chunk of missingChunks) {
+          if (containsChunk(currentViewport, chunk.x, chunk.y)) {
+            this.knownChunks.set(this.chunkKey(chunk.x, chunk.y), chunk);
+          }
+        }
+      }
+      const unchangedSnapshots = snapshots.filter((snapshot) => {
+        const tile = this.tiles.get(snapshot.chunk.x, snapshot.chunk.y);
+        return (tile?.headPatchHash ?? null)
+          === (headsBeforeFetch.get(`${snapshot.chunk.x},${snapshot.chunk.y}`) ?? null);
+      });
+      await this.applySnapshots(unchangedSnapshots);
+    } catch (error) {
+      console.error("Failed to fetch visible snapshots:", error);
+    } finally {
+      for (const chunk of missingChunks) this.pendingChunks.delete(this.chunkKey(chunk.x, chunk.y));
+    }
+  }
+
+  private chunkKey(x: number, y: number): string {
+    return `${x},${y}`;
   }
 
   readSnapshotRgba(worldX: number, worldY: number): Promise<[number, number, number, number]> {

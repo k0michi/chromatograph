@@ -21,6 +21,10 @@ export class TileStore {
     return this.tiles.get(TileStore.key(x, y));
   }
 
+  delete(tile: Tile): boolean {
+    return this.tiles.delete(TileStore.key(tile.x, tile.y));
+  }
+
   [Symbol.iterator](): IterableIterator<Tile> {
     return this.tiles.values();
   }

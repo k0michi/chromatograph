@@ -157,9 +157,6 @@ struct AppTests {
             "/ws", configuration: .init(maxFrameSize: 64 * 1024 * 1024)
           ) { inbound, outbound, _ in
             var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
-            #expect(
-              try snapshotData(try await iterator.next())[0].headPatchHash == registrationPatch.hash
-            )
             try await outbound.write(.binary(patchPacket))
             _ = try await iterator.next()  // Patch broadcast
             #expect(
@@ -172,7 +169,7 @@ struct AppTests {
   }
 
   @Test
-  func wsReplaysCommittedPatchesToNewConnectionsInOrder() async throws {
+  func snapshotEndpointReturnsOnlyRequestedChunks() async throws {
     let firstPatch = try testPatch(operations: [
       .blend(testBlendOperation(chunk: .init(x: 1, y: 1)))
     ])
@@ -203,12 +200,16 @@ struct AppTests {
         }
         group.addTask {
           await historyReady.wait()
-          _ = try await client.ws(
-            "/ws", configuration: .init(maxFrameSize: 64 * 1024 * 1024)
-          ) { inbound, _, _ in
-            var iterator = inbound.messages(maxSize: .max).makeAsyncIterator()
-            let replayed = try snapshotData(try await iterator.next())
-            #expect(replayed.map(\.headPatchHash) == [firstPatch.hash, secondPatch.hash])
+          let request = ByteBuffer(string: #"{"chunks":[{"x":2,"y":2}]}"#)
+          try await client.execute(
+            uri: "/api/snapshots",
+            method: .post,
+            headers: [.contentType: "application/json"],
+            body: request
+          ) { response in
+            #expect(response.status == .ok)
+            let snapshots = try SnapshotPacketCodec.decode(Data(response.body.readableBytesView))
+            #expect(snapshots.map(\.headPatchHash) == [secondPatch.hash])
           }
         }
         try await group.waitForAll()

@@ -10,6 +10,15 @@ typealias AppWSRequestContext = BasicWebSocketRequestContext
 private let maximumPatchPacketSize = 64 * 1024 * 1024
 private let patchImageSize = 256
 
+private struct SnapshotRequest: Decodable {
+  struct Chunk: Decodable {
+    let x: Int32
+    let y: Int32
+  }
+
+  let chunks: [Chunk]
+}
+
 private func validatePatchImages(_ patch: Patch) throws {
   for operation in patch.operations {
     guard case .blend(let blend) = operation else { continue }
@@ -73,6 +82,20 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
       throw HTTPError(.notFound)
     }
   }
+  router.post("/api/snapshots") { request, context -> Response in
+    let snapshotRequest = try await context.requestDecoder.decode(
+      SnapshotRequest.self,
+      from: request,
+      context: context
+    )
+    let chunks = snapshotRequest.chunks.map { TileChunk(x: $0.x, y: $0.y) }
+    let data = try await broadcaster.snapshots(chunks: chunks)
+    return Response(
+      status: .ok,
+      headers: [.contentType: "application/octet-stream"],
+      body: .init(byteBuffer: ByteBuffer(bytes: data))
+    )
+  }
   return router
 }
 
@@ -87,7 +110,7 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
   router.ws("/ws") { _, _ in
     return .upgrade()
   } onUpgrade: { inbound, outbound, _ in
-    let connectionID = try await broadcaster.synchronize(outbound)
+    let connectionID = await broadcaster.addConnection(outbound)
     do {
       for try await message in inbound.messages(maxSize: maximumPatchPacketSize) {
         switch message {
@@ -96,7 +119,7 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
             let patch = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
             try PatchValidator.validate(patch)
             try validatePatchImages(patch)
-            try await broadcaster.accept(patch, packet: buffer)
+            try await broadcaster.accept(patch)
           } catch {
             try await outbound.write(.text("Invalid patch packet"))
           }

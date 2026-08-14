@@ -7,8 +7,6 @@ actor PatchBroadcaster {
 
   private struct Connection {
     let writer: WebSocketOutboundWriter
-    var isSynchronizing: Bool
-    var queuedPackets: [ByteBuffer]
   }
 
   private var connections: [ConnectionID: Connection] = [:]
@@ -16,43 +14,10 @@ actor PatchBroadcaster {
   private var committedHashes: Set<String> = []
   private let chunks = ChunkManager()
 
-  func synchronize(_ writer: WebSocketOutboundWriter) async throws -> ConnectionID {
+  func addConnection(_ writer: WebSocketOutboundWriter) -> ConnectionID {
     let id = ConnectionID()
-    connections[id] = Connection(writer: writer, isSynchronizing: true, queuedPackets: [])
-
-    do {
-      let snapshots = latestSnapshots.values.sorted {
-        $0.chunk.x == $1.chunk.x
-          ? $0.chunk.y < $1.chunk.y
-          : $0.chunk.x < $1.chunk.x
-      }
-      if !snapshots.isEmpty {
-        try await writer.writeBinaryMessage(
-          ByteBuffer(
-            bytes: BroadcastPacketCodec.encode(
-              kind: .snapshots,
-              payload: try SnapshotPacketCodec.encode(snapshots)
-            )))
-      }
-
-      while true {
-        guard var connection = connections[id] else { return id }
-        guard !connection.queuedPackets.isEmpty else {
-          connection.isSynchronizing = false
-          connections[id] = connection
-          return id
-        }
-        let queued = connection.queuedPackets
-        connection.queuedPackets.removeAll(keepingCapacity: true)
-        connections[id] = connection
-        for packet in queued {
-          try await writer.writeBinaryMessage(packet)
-        }
-      }
-    } catch {
-      connections[id] = nil
-      throw error
-    }
+    connections[id] = Connection(writer: writer)
+    return id
   }
 
   func remove(_ id: ConnectionID) {
@@ -63,7 +28,18 @@ actor PatchBroadcaster {
     try await ChunkReplayPacketCodec.encode(chunks.replay(x: x, y: y, from: hash))
   }
 
-  func accept(_ patch: Patch, packet: ByteBuffer) async throws {
+  func snapshots(chunks: [TileChunk]) throws -> Data {
+    let keys = Set(chunks.map { SnapshotKey($0) })
+    let availableSnapshots = keys.compactMap { latestSnapshots[$0] }
+    let snapshots = availableSnapshots.sorted { lhs, rhs in
+      lhs.chunk.x == rhs.chunk.x
+        ? lhs.chunk.y < rhs.chunk.y
+        : lhs.chunk.x < rhs.chunk.x
+    }
+    return try SnapshotPacketCodec.encode(snapshots)
+  }
+
+  func accept(_ patch: Patch) async throws {
     let responsePackets: [ByteBuffer]
     if !committedHashes.contains(patch.hash) {
       let snapshots = try await chunks.apply(patch)
@@ -89,12 +65,7 @@ actor PatchBroadcaster {
 
     var disconnected: [ConnectionID] = []
     for id in Array(connections.keys) {
-      guard var connection = connections[id] else { continue }
-      if connection.isSynchronizing {
-        connection.queuedPackets.append(contentsOf: responsePackets)
-        connections[id] = connection
-        continue
-      }
+      guard let connection = connections[id] else { continue }
       do {
         for responsePacket in responsePackets {
           try await connection.writer.writeBinaryMessage(responsePacket)

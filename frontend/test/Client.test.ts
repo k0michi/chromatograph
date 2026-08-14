@@ -46,6 +46,7 @@ describe("Client", () => {
       createWebSocket: () => socket as unknown as WebSocket,
     });
     client.subscribeSnapshots(listener);
+    client.setViewport({ minX: 10, minY: -6, maxX: 13, maxY: -4 });
 
     const connecting = client.connect();
     socket.open();
@@ -82,6 +83,27 @@ describe("Client", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("ignores snapshots and patches outside the current viewport", async () => {
+    const socket = new MockWebSocket();
+    const snapshots = vi.fn();
+    const patches = vi.fn();
+    const client = new Client("ws://example.test/ws", {
+      createWebSocket: () => socket as unknown as WebSocket,
+    });
+    client.subscribeSnapshots(snapshots);
+    client.subscribePatches(patches);
+    client.setViewport({ minX: 0, minY: 0, maxX: 1, maxY: 1 });
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+
+    socket.receive(broadcastPacket(2, snapshotPacket(12, -5, patch.hash, new Uint8Array([1]))).buffer);
+    socket.receive(broadcastPacket(1, PatchEncoder.encode(patch)).buffer);
+
+    expect(snapshots).not.toHaveBeenCalled();
+    expect(patches).not.toHaveBeenCalled();
+  });
+
   it("queues patches while connecting", async () => {
     const socket = new MockWebSocket();
     const client = new Client("ws://example.test/ws", {
@@ -99,7 +121,7 @@ describe("Client", () => {
   it("fetches and decodes a chunk replay over HTTPS", async () => {
     const imageBytes = new Uint8Array([137, 80, 78, 71]);
     const packet = chunkReplayPacket(imageBytes, [patch]);
-    const request = vi.fn(async (_url: URL) => ({
+    const request = vi.fn(async (_url: URL, _init?: RequestInit) => ({
       ok: true,
       status: 200,
       arrayBuffer: async () => packet.buffer,
@@ -115,6 +137,26 @@ describe("Client", () => {
     expect(request.mock.calls[0]![0].href).toBe(
       `https://example.test/api/chunks/12/-5/replay?from=${patch.hash}`,
     );
+  });
+
+  it("fetches snapshots for a viewport over HTTPS", async () => {
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    const packet = snapshotPacket(12, -5, patch.hash, imageBytes);
+    const request = vi.fn(async (_url: URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => packet.buffer,
+    }) as Response);
+    const client = new Client("wss://example.test/ws", { fetch: request });
+
+    await expect(client.fetchSnapshots([{ x: 12, y: -5 }]))
+      .resolves.toEqual([{ chunk: { x: 12, y: -5 }, headPatchHash: patch.hash, imageBytes }]);
+    expect(request.mock.calls[0]![0].href).toBe("https://example.test/api/snapshots");
+    expect(request.mock.calls[0]![1]).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chunks: [{ x: 12, y: -5 }] }),
+    });
   });
 });
 

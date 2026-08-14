@@ -2,6 +2,7 @@ import type { Patch } from "~/canvas/Patch";
 import { PatchDecoder, PatchEncoder } from "~/canvas/serializePatch";
 import { ChunkReplayPacketDecoder, type ChunkReplay } from "./ChunkReplayPacket";
 import { SnapshotPacketDecoder, type ChunkSnapshotPacket } from "./SnapshotPacket";
+import { containsChunk, sameChunkViewport, type ChunkCoordinate, type ChunkViewport } from "./ChunkViewport";
 
 type SnapshotListener = (snapshots: readonly ChunkSnapshotPacket[]) => void;
 type PatchListener = (patch: Patch) => void;
@@ -23,6 +24,7 @@ export class Client implements Disposable {
   private socket: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
   private readonly pendingPackets: Uint8Array<ArrayBuffer>[] = [];
+  private viewport: ChunkViewport | null = null;
 
   constructor(
     private readonly baseURL: string | URL,
@@ -84,6 +86,11 @@ export class Client implements Disposable {
     socket.send(packet);
   }
 
+  setViewport(viewport: ChunkViewport): void {
+    if (sameChunkViewport(this.viewport, viewport)) return;
+    this.viewport = viewport;
+  }
+
   async fetchChunkReplay(chunkX: number, chunkY: number, fromHash: string): Promise<ChunkReplay> {
     const url = this.url(`/api/chunks/${chunkX}/${chunkY}/replay`, "http");
     url.searchParams.set("from", fromHash);
@@ -91,6 +98,19 @@ export class Client implements Disposable {
     const response = await request(url);
     if (!response.ok) throw new Error(`Chunk replay failed (${response.status}).`);
     return ChunkReplayPacketDecoder.decode(await response.arrayBuffer());
+  }
+
+  async fetchSnapshots(chunks: readonly ChunkCoordinate[]): Promise<readonly ChunkSnapshotPacket[]> {
+    if (chunks.length === 0) return [];
+    const url = this.url("/api/snapshots", "http");
+    const request = this.options.fetch ?? ((input: URL, init?: RequestInit) => fetch(input, init));
+    const response = await request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chunks }),
+    });
+    if (!response.ok) throw new Error(`Snapshot fetch failed (${response.status}).`);
+    return SnapshotPacketDecoder.decode(await response.arrayBuffer());
   }
 
   subscribeSnapshots(listener: SnapshotListener): () => void {
@@ -139,9 +159,21 @@ export class Client implements Disposable {
       const payload = data.slice(4);
       if (kind === 1) {
         const patch = PatchDecoder.decode(payload);
+        if (!this.viewport || !patch.operations.some((operation) =>
+          containsChunk(this.viewport!, operation.chunk.x, operation.chunk.y))) return;
         for (const listener of this.patchListeners) listener(patch);
       } else if (kind === 2) {
-        const snapshots = SnapshotPacketDecoder.decode(payload);
+        const viewport = this.viewport;
+        if (!viewport) return;
+        const snapshots = SnapshotPacketDecoder.decode(payload)
+          .filter((snapshot) => containsChunk(viewport, snapshot.chunk.x, snapshot.chunk.y))
+          .map((snapshot) => ({
+            ...snapshot,
+            // A decoded PNG is a view into the complete WebSocket packet. Copy only
+            // visible PNGs so the discarded snapshots do not keep that packet alive.
+            imageBytes: snapshot.imageBytes.slice(),
+          }));
+        if (snapshots.length === 0) return;
         for (const listener of this.snapshotListeners) listener(snapshots);
       } else {
         throw new Error(`Unsupported broadcast packet kind ${kind}.`);

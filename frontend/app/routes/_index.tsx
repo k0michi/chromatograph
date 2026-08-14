@@ -51,12 +51,12 @@ export default function Index() {
     const client = new Client(window.location.href, {
       onError: (error) => console.error("Patch WebSocket error:", error),
     });
+    const renderer = new CanvasRenderer(canvas, client);
+    rendererRef.current = renderer;
+    renderer.render();
     void client.connect().catch((error: unknown) => {
       console.error("Failed to connect Patch WebSocket:", error);
     });
-
-    const renderer = new CanvasRenderer(canvas, client);
-    rendererRef.current = renderer;
     let cursorInspectionPending = false;
     const unsubscribeCanvasContentRendered = renderer.onCanvasContentRendered(() => {
       if (!cursorNeedsInspectionRef.current || cursorInspectionPending) return;
