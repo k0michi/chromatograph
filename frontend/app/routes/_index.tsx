@@ -5,6 +5,7 @@ import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
 import { CanvasScaleBar, type CanvasScaleBarHandle } from "~/canvas/CanvasScaleBar";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
+import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import type { Route } from "./+types/_index";
@@ -23,6 +24,7 @@ export default function Index() {
   const cursorNeedsInspectionRef = useRef(false);
 
   const [color, setColor] = useState("#222222");
+  const [compositeOp, setCompositeOp] = useState(CompositeOp.SourceOver);
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
@@ -38,7 +40,8 @@ export default function Index() {
     brush.settings.size = size;
     brush.settings.hardness = hardness;
     brush.settings.opacity = opacity;
-  }, [color, size, hardness, opacity]);
+    brush.settings.compositeOp = compositeOp;
+  }, [color, size, hardness, opacity, compositeOp]);
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
@@ -100,6 +103,7 @@ export default function Index() {
 
     const brush = new Brush({
       tip: new RoundBrushTip(),
+      compositeOp,
       size,
       hardness,
       color,
@@ -129,6 +133,14 @@ export default function Index() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") {
         isSpaceHeld = true;
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "b") {
+        setCompositeOp(CompositeOp.SourceOver);
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "e") {
+        setCompositeOp(CompositeOp.DestinationOut);
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
@@ -262,6 +274,24 @@ export default function Index() {
           fontSize: 12,
         }}
       >
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            aria-pressed={compositeOp === CompositeOp.SourceOver}
+            style={{ fontWeight: compositeOp === CompositeOp.SourceOver ? 700 : 400 }}
+            onClick={() => setCompositeOp(CompositeOp.SourceOver)}
+          >
+            Brush (B)
+          </button>
+          <button
+            type="button"
+            aria-pressed={compositeOp === CompositeOp.DestinationOut}
+            style={{ fontWeight: compositeOp === CompositeOp.DestinationOut ? 700 : 400 }}
+            onClick={() => setCompositeOp(CompositeOp.DestinationOut)}
+          >
+            Eraser (E)
+          </button>
+        </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           Color
           <input type="color" value={color} onChange={(event) => setColor(event.target.value)} />
@@ -314,7 +344,7 @@ export default function Index() {
           />
           Grid
         </label>
-        <span style={{ opacity: 0.7 }}>Drag to paint · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
+        <span style={{ opacity: 0.7 }}>B brush · E eraser · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
       <div

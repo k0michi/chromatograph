@@ -45,15 +45,21 @@ void main() {
 }
 `;
 
-/** Performs source-over in straight-alpha space and writes another straight-alpha snapshot. */
+/** Performs a Porter-Duff composite operation in straight-alpha space. */
 export const STRAIGHT_COMPOSITE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+
+const int COMPOSITE_OP_SOURCE_OVER = 0;
+const int COMPOSITE_OP_DESTINATION_OUT = 1;
+const int COMPOSITE_OP_SOURCE_IN = 2;
+const int COMPOSITE_OP_SOURCE_ATOP = 3;
 
 in vec2 vUv;
 uniform sampler2D uSource;
 uniform sampler2D uDestination;
 uniform vec2 uTargetSize;
 uniform float uOpacity;
+uniform int uCompositeOp;
 out vec4 outColor;
 
 void main() {
@@ -61,10 +67,19 @@ void main() {
   vec2 destinationUv = gl_FragCoord.xy / uTargetSize;
   vec4 destination = texture(uDestination, destinationUv);
   float sourceAlpha = source.a * uOpacity;
-  float inverseSourceAlpha = 1.0 - sourceAlpha;
-  float outputAlpha = sourceAlpha + destination.a * inverseSourceAlpha;
-  vec3 premultiplied = source.rgb * sourceAlpha
-    + destination.rgb * destination.a * inverseSourceAlpha;
+  float sourceFactor = 1.0;
+  float destinationFactor = 1.0 - sourceAlpha;
+  if (uCompositeOp == COMPOSITE_OP_DESTINATION_OUT) {
+    sourceFactor = 0.0;
+  } else if (uCompositeOp == COMPOSITE_OP_SOURCE_IN) {
+    sourceFactor = destination.a;
+    destinationFactor = 0.0;
+  } else if (uCompositeOp == COMPOSITE_OP_SOURCE_ATOP) {
+    sourceFactor = destination.a;
+  }
+  float outputAlpha = sourceAlpha * sourceFactor + destination.a * destinationFactor;
+  vec3 premultiplied = source.rgb * sourceAlpha * sourceFactor
+    + destination.rgb * destination.a * destinationFactor;
   vec3 straight = outputAlpha > 0.0 ? premultiplied / outputAlpha : vec3(0.0);
   outColor = vec4(straight, outputAlpha);
 }
@@ -89,3 +104,4 @@ void main() {
   outColor = vec4(vec3(0.25), alpha * 0.65);
 }
 `;
+import { CompositeOp } from "./Operation";

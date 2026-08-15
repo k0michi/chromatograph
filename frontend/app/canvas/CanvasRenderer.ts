@@ -17,7 +17,7 @@ import {
   TILE_GRID_FRAGMENT_SHADER,
 } from "./CanvasShaders";
 import { CHUNK_VIEW_PROJECTION, worldToChunkPosition } from "./chunkSpace";
-import type { BlendOperation, UndoOperation } from "./Operation";
+import { CompositeOp, type BlendOperation, type UndoOperation } from "./Operation";
 import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
@@ -69,6 +69,7 @@ export class CanvasRenderer {
   readonly camera = new Camera2D();
   readonly tiles = new TileStore();
   readonly uncommittedOverlays = new Map<string, UncommittedOverlay>();
+  readonly transparentSnapshot: TileSnapshot;
   showGrid = false;
 
   private readonly undoStack: HistoryRecord[] = [];
@@ -154,6 +155,7 @@ export class CanvasRenderer {
     });
 
     this.quad = new QuadGeometry(device);
+    this.transparentSnapshot = this.createEmptySnapshot();
   }
 
   createPatchBindGroup(texture: Texture): BindGroup {
@@ -185,6 +187,7 @@ export class CanvasRenderer {
     sourceMvp: mat3,
     opacity: number,
     copyDestination = true,
+    compositeOp = CompositeOp.SourceOver,
   ): void {
     if (destination === output) {
       throw new Error("Straight-alpha composition requires different input and output snapshots.");
@@ -216,6 +219,7 @@ export class CanvasRenderer {
     compositePass.setUniformInt("uSource", IMAGE_BINDING);
     compositePass.setUniformInt("uDestination", DESTINATION_BINDING);
     compositePass.setUniformFloat2("uTargetSize", TILE_SIZE, TILE_SIZE);
+    compositePass.setUniformInt("uCompositeOp", compositeOp);
     this.drawQuad(compositePass, sourceMvp, compositeBindGroup, opacity);
     compositePass.end();
   }
@@ -231,7 +235,7 @@ export class CanvasRenderer {
       minFilter: "nearest",
       magFilter: "nearest",
     });
-    this.compositeOntoSnapshot(destination, output, texture, SNAPSHOT_MVP, operation.opacity, false);
+    this.compositeOntoSnapshot(destination, output, texture, SNAPSHOT_MVP, operation.opacity, false, operation.compositeOp);
   }
 
   createEmptySnapshot(): TileSnapshot {
@@ -524,9 +528,13 @@ export class CanvasRenderer {
 
     const viewProjection = this.camera.getViewProjectionMatrix();
     const bounds = this.camera.visibleWorldBounds();
+    const previewedTiles = new Set(this.uncommittedOverlays.keys());
 
     for (const tile of this.tiles) {
       if (!tile.snapshot) {
+        continue;
+      }
+      if (previewedTiles.has(this.chunkKey(tile.x, tile.y))) {
         continue;
       }
       const tileMinX = tile.x * TILE_SIZE;
@@ -661,6 +669,7 @@ export class CanvasRenderer {
     this.copyPipeline.dispose();
     this.straightCompositePipeline.dispose();
     this.gridPipeline.dispose();
+    this.disposeSnapshot(this.transparentSnapshot);
     for (const tile of this.tiles) {
       this.disposeTileSnapshots(tile);
     }

@@ -1,10 +1,12 @@
 import type { BindGroup } from "~/webgl/BindGroup";
 import type { RawImageSource, Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
+import type { CompositeOp } from "../Operation";
 import type { BrushMask, BrushTip } from "./BrushTip";
 
 export interface BrushSettings {
   tip: BrushTip;
+  compositeOp: CompositeOp;
   size: number;
   hardness: number;
   color: string;

@@ -1,4 +1,5 @@
 import { mat3 } from "gl-matrix";
+import type { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
 import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
 import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
@@ -9,8 +10,32 @@ import type { Brush } from "./Brush";
 interface ChunkAccumulation {
   chunkX: number;
   chunkY: number;
-  snapshot: TileSnapshot;
-  spareSnapshot: TileSnapshot;
+  source: SnapshotAccumulator;
+  previewSnapshot: TileSnapshot;
+}
+
+class SnapshotAccumulator {
+  private current: TileSnapshot;
+  private spare: TileSnapshot;
+
+  constructor(private readonly renderer: CanvasRenderer) {
+    this.current = renderer.createEmptySnapshot();
+    this.spare = renderer.createEmptySnapshot();
+  }
+
+  get snapshot(): TileSnapshot {
+    return this.current;
+  }
+
+  composite(texture: Texture, mvp: mat3, opacity: number): void {
+    this.renderer.compositeOntoSnapshot(this.current, this.spare, texture, mvp, opacity);
+    [this.current, this.spare] = [this.spare, this.current];
+  }
+
+  dispose(): void {
+    this.renderer.disposeSnapshot(this.current);
+    this.renderer.disposeSnapshot(this.spare);
+  }
 }
 
 function chunkKey(chunkX: number, chunkY: number): string {
@@ -20,11 +45,14 @@ function chunkKey(chunkX: number, chunkY: number): string {
 export class BrushStroke {
   private lastStampPoint: { x: number; y: number } | null = null;
   private readonly touchedChunks = new Map<string, ChunkAccumulation>();
+  private readonly compositeOp: CompositeOp;
 
   constructor(
     private readonly renderer: CanvasRenderer,
     private readonly brush: Brush,
-  ) { }
+  ) {
+    this.compositeOp = brush.settings.compositeOp;
+  }
 
   begin(worldX: number, worldY: number): void {
     this.lastStampPoint = { x: worldX, y: worldY };
@@ -64,12 +92,12 @@ export class BrushStroke {
     const touched = Array.from(this.touchedChunks.values());
     try {
       const operations: BlendOperation[] = await Promise.all(touched.map(async (accumulation) => {
-        const rgba = await accumulation.snapshot.framebuffer.readRgba8Async(TILE_SIZE, TILE_SIZE);
+        const rgba = await accumulation.source.snapshot.framebuffer.readRgba8Async(TILE_SIZE, TILE_SIZE);
         return {
           type: "blend",
           chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
           parents: this.renderer.getChunkParents(accumulation.chunkX, accumulation.chunkY),
-          compositeOp: CompositeOp.SourceOver,
+          compositeOp: this.compositeOp,
           blendMode: BlendMode.Normal,
           opacity: 1,
           imageBytes: await encodePngInWorker(rgba, TILE_SIZE, TILE_SIZE),
@@ -79,11 +107,12 @@ export class BrushStroke {
     } finally {
       for (const accumulation of touched) {
         const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
-        if (this.renderer.uncommittedOverlays.get(key)?.bindGroup === accumulation.snapshot.bindGroup) {
+        const overlay = this.renderer.uncommittedOverlays.get(key);
+        if (overlay?.bindGroup === accumulation.previewSnapshot.bindGroup) {
           this.renderer.uncommittedOverlays.delete(key);
         }
-        this.renderer.disposeSnapshot(accumulation.snapshot);
-        this.renderer.disposeSnapshot(accumulation.spareSnapshot);
+        accumulation.source.dispose();
+        this.renderer.disposeSnapshot(accumulation.previewSnapshot);
       }
       this.touchedChunks.clear();
     }
@@ -106,21 +135,8 @@ export class BrushStroke {
         const model = mat3.fromValues(size, 0, 0, 0, size, 0, localX, localY, 1);
         const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
 
-        const previous = accumulation.snapshot;
-        this.renderer.compositeOntoSnapshot(
-          previous,
-          accumulation.spareSnapshot,
-          stampTexture,
-          mvp,
-          opacity,
-        );
-        accumulation.snapshot = accumulation.spareSnapshot;
-        accumulation.spareSnapshot = previous;
-        this.renderer.uncommittedOverlays.set(chunkKey(chunkX, chunkY), {
-          chunkX,
-          chunkY,
-          bindGroup: accumulation.snapshot.bindGroup,
-        });
+        accumulation.source.composite(stampTexture, mvp, opacity);
+        this.updatePreview(accumulation);
       }
     }
   }
@@ -134,15 +150,36 @@ export class BrushStroke {
 
     this.renderer.activateChunk(chunkX, chunkY);
 
-    const snapshot = this.renderer.createEmptySnapshot();
     const accumulation: ChunkAccumulation = {
       chunkX,
       chunkY,
-      snapshot,
-      spareSnapshot: this.renderer.createEmptySnapshot(),
+      source: new SnapshotAccumulator(this.renderer),
+      previewSnapshot: this.renderer.createEmptySnapshot(),
     };
     this.touchedChunks.set(key, accumulation);
-    this.renderer.uncommittedOverlays.set(key, { chunkX, chunkY, bindGroup: snapshot.bindGroup });
+    this.updatePreview(accumulation);
     return accumulation;
+  }
+
+  private updatePreview(accumulation: ChunkAccumulation): void {
+    const key = chunkKey(accumulation.chunkX, accumulation.chunkY);
+    const destination = this.renderer.tiles.get(accumulation.chunkX, accumulation.chunkY)?.snapshot
+      ?? this.renderer.transparentSnapshot;
+    const model = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, 0, 0, 1);
+    const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
+    this.renderer.compositeOntoSnapshot(
+      destination,
+      accumulation.previewSnapshot,
+      accumulation.source.snapshot.texture,
+      mvp,
+      1,
+      true,
+      this.compositeOp,
+    );
+    this.renderer.uncommittedOverlays.set(key, {
+      chunkX: accumulation.chunkX,
+      chunkY: accumulation.chunkY,
+      bindGroup: accumulation.previewSnapshot.bindGroup,
+    });
   }
 }
