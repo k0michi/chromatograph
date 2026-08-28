@@ -4,7 +4,8 @@ import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { StrokeSmoother, type ScreenStrokePoint } from "~/canvas/brush/StrokeSmoother";
-import { CanvasRenderer } from "~/canvas/CanvasRenderer";
+import { CanvasRenderer, type OperationHistoryItem } from "~/canvas/CanvasRenderer";
+import { OperationHistoryPanel } from "~/canvas/OperationHistoryPanel";
 import { CanvasRulers, type CanvasRulersHandle } from "~/canvas/CanvasRulers";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { CompositeOp } from "~/canvas/Operation";
@@ -187,6 +188,7 @@ export default function Index() {
   const [showGrid, setShowGrid] = useState(false);
   const [showRulers, setShowRulers] = useState(true);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
+  const [operationHistory, setOperationHistory] = useState<readonly OperationHistoryItem[]>([]);
 
   const isEraser = tool === "eraser";
   const isPaintTool = tool === "brush" || tool === "eraser";
@@ -307,6 +309,9 @@ export default function Index() {
     });
     const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
+    const unsubscribeHistory = renderer.onHistoryChanged(() => {
+      setOperationHistory(renderer.operationHistory);
+    });
     void client.connect().catch((error: unknown) => {
       console.error("Failed to connect Patch WebSocket:", error);
     });
@@ -603,6 +608,7 @@ export default function Index() {
       unsubscribePacketLogs();
       unsubscribeConnectionState();
       unsubscribeInvalidated();
+      unsubscribeHistory();
       client.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -774,6 +780,16 @@ export default function Index() {
       {showRulers ? <CanvasRulers ref={rulersRef} top={CHROME_TOP} left={52} right={300} /> : null}
       {/* Right sidebar (docked panels; will become movable windows later) */}
       <aside style={sidebarStyle}>
+        <PanelWindow title="History">
+          <OperationHistoryPanel
+            items={operationHistory}
+            onSetActive={(id, active) => {
+              void rendererRef.current?.setHistoryItemActive(id, active).catch((error: unknown) => {
+                console.error("Failed to toggle history operation:", error);
+              });
+            }}
+          />
+        </PanelWindow>
         <PanelWindow title="Inspector">
           <CursorInspectorPanel inspection={cursorInspection} />
         </PanelWindow>

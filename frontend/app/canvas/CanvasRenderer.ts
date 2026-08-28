@@ -52,6 +52,19 @@ interface HistoryRecord {
   patch: Patch;
   entries: { tile: Tile; entry: TileOperationEntry }[];
   toggleHeadHash: string;
+  active: boolean;
+  pending: boolean;
+  readonly label: string;
+  readonly createdAt: number;
+}
+
+export interface OperationHistoryItem {
+  readonly id: string;
+  readonly label: string;
+  readonly createdAt: number;
+  readonly chunkCount: number;
+  readonly active: boolean;
+  readonly pending: boolean;
 }
 
 export type CanvasContentRenderedListener = () => void;
@@ -74,8 +87,9 @@ export class CanvasRenderer {
   readonly transparentSnapshot: TileSnapshot;
   private gridVisible = false;
 
-  private readonly undoStack: HistoryRecord[] = [];
-  private readonly redoStack: HistoryRecord[] = [];
+  private readonly historyRecords: HistoryRecord[] = [];
+  private readonly redoOrder: HistoryRecord[] = [];
+  private readonly historyChangedListeners = new Set<() => void>();
   private readonly optimisticPatchHashes = new Set<string>();
   private readonly replaySyncing = new Set<Tile>();
   private readonly replayPending = new Map<Tile, string>();
@@ -272,8 +286,17 @@ export class CanvasRenderer {
     }
     for (const tile of touchedTiles) this.rebuildSnapshot(tile);
 
-    this.undoStack.push({ patch, entries, toggleHeadHash: patch.hash });
-    this.redoStack.length = 0;
+    const isEraser = operations.every((operation) => operation.compositeOp === CompositeOp.DestinationOut);
+    this.historyRecords.push({
+      patch,
+      entries,
+      toggleHeadHash: patch.hash,
+      active: true,
+      pending: false,
+      label: isEraser ? "Eraser stroke" : "Brush stroke",
+      createdAt: Date.now(),
+    });
+    this.emitHistoryChanged();
     void this.client.send(patch).catch((error: unknown) => {
       console.error("Failed to persist Patch for delivery:", error);
     });
@@ -415,11 +438,27 @@ export class CanvasRenderer {
   }
 
   get canUndo(): boolean {
-    return this.undoStack.length > 0;
+    return this.historyRecords.some((record) => record.active && !record.pending);
   }
 
   get canRedo(): boolean {
-    return this.redoStack.length > 0;
+    return this.redoOrder.some((record) => !record.active && !record.pending);
+  }
+
+  get operationHistory(): readonly OperationHistoryItem[] {
+    return this.historyRecords.map((record) => ({
+      id: record.patch.hash,
+      label: record.label,
+      createdAt: record.createdAt,
+      chunkCount: record.entries.length,
+      active: record.active,
+      pending: record.pending,
+    }));
+  }
+
+  onHistoryChanged(listener: () => void): () => void {
+    this.historyChangedListeners.add(listener);
+    return () => this.historyChangedListeners.delete(listener);
   }
 
   get showGrid(): boolean {
@@ -484,55 +523,74 @@ export class CanvasRenderer {
   }
 
   async undo(): Promise<void> {
-    const record = this.undoStack.pop();
-    if (!record) {
-      return;
+    let record: HistoryRecord | undefined;
+    for (let index = this.historyRecords.length - 1; index >= 0; index--) {
+      const candidate = this.historyRecords[index];
+      if (candidate.active && !candidate.pending) {
+        record = candidate;
+        break;
+      }
     }
-    const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
-      type: "undo",
-      chunk: { x: tile.x, y: tile.y },
-      parents: [record.toggleHeadHash],
-    }));
-    const patch = await Patch.create(operations, await this.identity);
-    this.optimisticPatchHashes.add(patch.hash);
-    record.toggleHeadHash = patch.hash;
-    const touchedTiles = new Set<Tile>();
-    for (const { tile } of record.entries) {
-      tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
-      tile.headPatchHash = patch.hash;
-      touchedTiles.add(tile);
-    }
-    for (const tile of touchedTiles) this.rebuildSnapshot(tile);
-    this.redoStack.push(record);
-    void this.client.send(patch).catch((error: unknown) => {
-      console.error("Failed to persist undo Patch for delivery:", error);
-    });
+    if (!record) return;
+    await this.setRecordActive(record, false);
   }
 
   async redo(): Promise<void> {
-    const record = this.redoStack.pop();
-    if (!record) {
-      return;
+    let record: HistoryRecord | undefined;
+    while (!record && this.redoOrder.length > 0) {
+      const candidate = this.redoOrder.pop()!;
+      if (!candidate.active && !candidate.pending) record = candidate;
     }
-    const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
-      type: "undo",
-      chunk: { x: tile.x, y: tile.y },
-      parents: [record.toggleHeadHash],
-    }));
-    const patch = await Patch.create(operations, await this.identity);
-    this.optimisticPatchHashes.add(patch.hash);
-    record.toggleHeadHash = patch.hash;
-    const touchedTiles = new Set<Tile>();
-    for (const { tile } of record.entries) {
-      tile.addOperation(patch.hash, operations.find((op) => op.chunk.x === tile.x && op.chunk.y === tile.y)!);
-      tile.headPatchHash = patch.hash;
-      touchedTiles.add(tile);
+    if (!record) return;
+    await this.setRecordActive(record, true);
+  }
+
+  async setHistoryItemActive(id: string, active: boolean): Promise<void> {
+    const record = this.historyRecords.find((candidate) => candidate.patch.hash === id);
+    if (!record || record.active === active || record.pending) return;
+    await this.setRecordActive(record, active);
+  }
+
+  private async setRecordActive(record: HistoryRecord, active: boolean): Promise<void> {
+    record.pending = true;
+    this.emitHistoryChanged();
+    try {
+      const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
+        type: "undo",
+        chunk: { x: tile.x, y: tile.y },
+        parents: [record.toggleHeadHash],
+      }));
+      const patch = await Patch.create(operations, await this.identity);
+      this.optimisticPatchHashes.add(patch.hash);
+      record.toggleHeadHash = patch.hash;
+      const touchedTiles = new Set<Tile>();
+      for (const { tile } of record.entries) {
+        const operation = operations.find((candidate) =>
+          candidate.chunk.x === tile.x && candidate.chunk.y === tile.y)!;
+        tile.addOperation(patch.hash, operation);
+        tile.headPatchHash = patch.hash;
+        touchedTiles.add(tile);
+      }
+      for (const tile of touchedTiles) this.rebuildSnapshot(tile);
+      record.active = active;
+      if (active) {
+        for (let index = this.redoOrder.length - 1; index >= 0; index--) {
+          if (this.redoOrder[index] === record) this.redoOrder.splice(index, 1);
+        }
+      } else if (!this.redoOrder.includes(record)) {
+        this.redoOrder.push(record);
+      }
+      void this.client.send(patch).catch((error: unknown) => {
+        console.error(`Failed to persist ${active ? "redo" : "undo"} Patch for delivery:`, error);
+      });
+    } finally {
+      record.pending = false;
+      this.emitHistoryChanged();
     }
-    for (const tile of touchedTiles) this.rebuildSnapshot(tile);
-    this.undoStack.push(record);
-    void this.client.send(patch).catch((error: unknown) => {
-      console.error("Failed to persist redo Patch for delivery:", error);
-    });
+  }
+
+  private emitHistoryChanged(): void {
+    for (const listener of this.historyChangedListeners) listener();
   }
 
   private rebuildSnapshot(tile: Tile): void {
