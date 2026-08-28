@@ -17,9 +17,7 @@ export class PngCodec {
       { width, height, data: rgba, depth: 8, channels: 4 },
       { zlib: { level: 3 } },
     );
-    const png = new Uint8Array(encoded.length);
-    png.set(encoded);
-    return png;
+    return this.transferableView(encoded);
   }
 
   static decodeRGBA(png: Uint8Array<ArrayBuffer>, width: number, height: number): DecodedPng {
@@ -31,10 +29,16 @@ export class PngCodec {
       throw new Error(`Expected an 8-bit RGBA PNG, received depth=${decoded.depth}, channels=${decoded.channels}.`);
     }
 
-    const rgba = new Uint8Array(decoded.data.length);
-    rgba.set(decoded.data);
+    const rgba = this.transferableView(decoded.data);
     this.validateDimensions(rgba.length, width, height);
     return { width, height, rgba };
+  }
+
+  private static transferableView(bytes: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
+    if (bytes.buffer instanceof ArrayBuffer) {
+      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    }
+    return Uint8Array.from(bytes);
   }
 
   private static validateDimensions(byteLength: number, width: number, height: number): void {

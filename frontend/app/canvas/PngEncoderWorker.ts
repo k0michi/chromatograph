@@ -30,6 +30,10 @@ class PngEncoderWorker {
     };
   }
 
+  get load(): number {
+    return this.pending.size;
+  }
+
   encode(rgba: Uint8Array<ArrayBuffer>, width: number, height: number): Promise<Uint8Array<ArrayBuffer>> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -40,13 +44,25 @@ class PngEncoderWorker {
   }
 }
 
-let sharedEncoder: PngEncoderWorker | undefined;
+const workers: PngEncoderWorker[] = [];
+
+function encoderWorker(): PngEncoderWorker {
+  const idle = workers.find((worker) => worker.load === 0);
+  if (idle) return idle;
+  const maximumWorkers = Math.max(1, Math.min(2, navigator.hardwareConcurrency || 2));
+  if (workers.length < maximumWorkers) {
+    const worker = new PngEncoderWorker();
+    workers.push(worker);
+    return worker;
+  }
+  return workers.reduce((leastBusy, candidate) =>
+    candidate.load < leastBusy.load ? candidate : leastBusy);
+}
 
 export function encodePngInWorker(
   rgba: Uint8Array<ArrayBuffer>,
   width: number,
   height: number,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  sharedEncoder ??= new PngEncoderWorker();
-  return sharedEncoder.encode(rgba, width, height);
+  return encoderWorker().encode(rgba, width, height);
 }

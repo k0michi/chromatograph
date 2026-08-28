@@ -303,15 +303,31 @@ export class CanvasRenderer {
   }
 
   private async applySnapshotsNow(snapshots: readonly ChunkSnapshotPacket[]): Promise<void> {
-    for (const update of snapshots) {
-      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) continue;
+    const pending = snapshots.flatMap((update) => {
+      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) return [];
       this.knownChunks.set(this.chunkKey(update.chunk.x, update.chunk.y), update.chunk);
       const tile = this.tiles.getOrCreate(update.chunk.x, update.chunk.y);
-      if (tile.isActive) {
-        continue;
+      if (tile.isActive) return [];
+      return [{
+        update,
+        tile,
+        rgba: decodePngInWorker(update.imageBytes, TILE_SIZE, TILE_SIZE),
+      }];
+    });
+
+    // Apply each tile the moment its own decode resolves so the canvas fills in
+    // progressively. Errors are handled per tile so one failed decode neither
+    // blocks the others nor surfaces as an unhandled promise rejection.
+    await Promise.all(pending.map(async ({ update, tile, rgba: decoding }) => {
+      let rgba: Uint8Array<ArrayBuffer>;
+      try {
+        rgba = await decoding;
+      } catch (error) {
+        console.error(`Failed to decode snapshot for chunk ${update.chunk.x},${update.chunk.y}:`, error);
+        return;
       }
-      const rgba = await decodePngInWorker(update.imageBytes, TILE_SIZE, TILE_SIZE);
-      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) continue;
+      if (!this.viewport || !containsChunk(this.viewport, update.chunk.x, update.chunk.y)) return;
+      if (tile.isActive) return;
       const snapshot = this.createSnapshotFromRGBA(rgba);
       this.disposeTileSnapshots(tile);
       tile.snapshot = snapshot;
@@ -320,7 +336,7 @@ export class CanvasRenderer {
       tile.operationEntries.length = 0;
       tile.containsEntireOperationOrder = false;
       this.invalidate();
-    }
+    }));
   }
 
   private scheduleActiveChunkSync(tile: Tile, fromHash: string): void {

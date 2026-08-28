@@ -47,14 +47,19 @@ class PngDecoderWorker {
   }
 }
 
-let workers: PngDecoderWorker[] | undefined;
+const workers: PngDecoderWorker[] = [];
 
-function decoderWorkers(): PngDecoderWorker[] {
-  if (!workers) {
-    const workerCount = Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2));
-    workers = Array.from({ length: workerCount }, () => new PngDecoderWorker());
+function decoderWorker(): PngDecoderWorker {
+  const idle = workers.find((worker) => worker.load === 0);
+  if (idle) return idle;
+  const maximumWorkers = Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2));
+  if (workers.length < maximumWorkers) {
+    const worker = new PngDecoderWorker();
+    workers.push(worker);
+    return worker;
   }
-  return workers;
+  return workers.reduce((leastBusy, candidate) =>
+    candidate.load < leastBusy.load ? candidate : leastBusy);
 }
 
 export function decodePngInWorker(
@@ -62,7 +67,5 @@ export function decodePngInWorker(
   width: number,
   height: number,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  const worker = decoderWorkers().reduce((leastBusy, candidate) =>
-    candidate.load < leastBusy.load ? candidate : leastBusy);
-  return worker.decode(png, width, height);
+  return decoderWorker().decode(png, width, height);
 }
