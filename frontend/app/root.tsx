@@ -6,8 +6,10 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
+import { useEffect } from "react";
 import "modern-normalize";
 
+import { registerServiceWorker } from "~/pwa/registerServiceWorker";
 import type { Route } from "./+types/root";
 
 export const links: Route.LinksFunction = () => [];
@@ -31,6 +33,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  useEffect(() => {
+    void registerServiceWorker().catch((error: unknown) => {
+      console.error("Failed to register Service Worker:", error);
+    });
+  }, []);
+
   return <Outlet />;
 }
 
