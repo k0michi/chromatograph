@@ -10,24 +10,33 @@ import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
 import { NetworkDebugPanel, type NetworkDebugPanelHandle } from "~/network/NetworkDebugPanel";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
+import { MenuBar, type MenuBarMenu } from "~/ui/MenuBar";
 import { PanelWindow } from "~/ui/PanelWindow";
 import type { Route } from "./+types/_index";
+
+const MENU_BAR_HEIGHT = 28;
+const OPTIONS_BAR_HEIGHT = 44;
+const CHROME_TOP = MENU_BAR_HEIGHT + OPTIONS_BAR_HEIGHT;
 
 export function meta(_args: Route.MetaArgs) {
   return [{ title: "Chromatograph" }];
 }
 
-type Tool = "brush" | "eraser" | "move" | "zoom";
+type Tool = "brush" | "eraser" | "move" | "zoom" | "rotate";
 
 const TOOL_LABELS: Record<Tool, string> = {
   brush: "Brush",
   eraser: "Eraser",
   move: "Move",
   zoom: "Zoom",
+  rotate: "Rotate",
 };
 
 function cursorForTool(tool: Tool): string {
-  return tool === "move" ? "grab" : tool === "zoom" ? "zoom-in" : "crosshair";
+  if (tool === "move") return "grab";
+  if (tool === "zoom") return "zoom-in";
+  if (tool === "rotate") return "grab";
+  return "crosshair";
 }
 
 const TOOL_RAIL: readonly { id: Tool; glyph: string; shortcut: string }[] = [
@@ -35,14 +44,31 @@ const TOOL_RAIL: readonly { id: Tool; glyph: string; shortcut: string }[] = [
   { id: "eraser", glyph: "E", shortcut: "E" },
   { id: "move", glyph: "M", shortcut: "H" },
   { id: "zoom", glyph: "Z", shortcut: "Z" },
+  { id: "rotate", glyph: "R", shortcut: "R" },
 ];
 
-const topBarStyle: React.CSSProperties = {
+const menuBarStyle: React.CSSProperties = {
   position: "fixed",
   top: 0,
   left: 0,
   right: 0,
-  height: 44,
+  height: MENU_BAR_HEIGHT,
+  display: "flex",
+  alignItems: "stretch",
+  padding: "0 6px",
+  background: "var(--panel-bg)",
+  borderBottom: "1px solid var(--panel-border)",
+  color: "var(--text)",
+  fontFamily: "sans-serif",
+  zIndex: 21,
+};
+
+const topBarStyle: React.CSSProperties = {
+  position: "fixed",
+  top: MENU_BAR_HEIGHT,
+  left: 0,
+  right: 0,
+  height: OPTIONS_BAR_HEIGHT,
   display: "flex",
   alignItems: "center",
   gap: 14,
@@ -86,7 +112,7 @@ const topBtnStyle: React.CSSProperties = {
 
 const toolRailStyle: React.CSSProperties = {
   position: "fixed",
-  top: 44,
+  top: CHROME_TOP,
   left: 0,
   bottom: 0,
   width: 52,
@@ -109,7 +135,7 @@ const toolRailDividerStyle: React.CSSProperties = {
 
 const sidebarStyle: React.CSSProperties = {
   position: "fixed",
-  top: 44,
+  top: CHROME_TOP,
   right: 0,
   bottom: 0,
   width: 300,
@@ -162,6 +188,41 @@ export default function Index() {
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const isSpaceHeldRef = useRef(false);
+
+  const menus: MenuBarMenu[] = [
+    {
+      label: "Edit",
+      items: [
+        {
+          label: "Undo",
+          shortcut: "⌘Z",
+          disabled: () => !rendererRef.current?.canUndo,
+          onSelect: () => void rendererRef.current?.undo(),
+        },
+        {
+          label: "Redo",
+          shortcut: "⇧⌘Z",
+          disabled: () => !rendererRef.current?.canRedo,
+          onSelect: () => void rendererRef.current?.redo(),
+        },
+      ],
+    },
+    {
+      label: "View",
+      items: [
+        {
+          label: "Show Grid",
+          checked: showGrid,
+          onSelect: () => setShowGrid((value) => !value),
+        },
+        { separator: true, label: "" },
+        {
+          label: "Reset Rotation",
+          onSelect: () => rendererRef.current?.camera.resetRotation(),
+        },
+      ],
+    },
+  ];
 
   useEffect(() => {
     const brush = brushRef.current;
@@ -274,10 +335,18 @@ export default function Index() {
     resizeObserver.observe(canvas);
     scheduleRender();
 
-    const ZOOM_DRAG_THRESHOLD = 4;
+    const SCRUB_DRAG_THRESHOLD = 4;
     let panOrigin: { x: number; y: number } | null = null;
-    let zoomDrag:
-      | { anchorX: number; anchorY: number; startX: number; lastX: number; alt: boolean; dragging: boolean }
+    let scrubDrag:
+      | {
+          kind: "zoom" | "rotate";
+          anchorX: number;
+          anchorY: number;
+          startX: number;
+          lastX: number;
+          alt: boolean;
+          dragging: boolean;
+        }
       | null = null;
     let isPainting = false;
 
@@ -304,6 +373,7 @@ export default function Index() {
         if (key === "e") return setTool("eraser");
         if (key === "h" || key === "v") return setTool("move");
         if (key === "z") return setTool("zoom");
+        if (key === "r") return setTool("rotate");
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -335,13 +405,13 @@ export default function Index() {
         canvas.style.cursor = "grabbing";
         return;
       }
-      if (activeTool === "zoom") {
+      if (activeTool === "zoom" || activeTool === "rotate") {
         const rect = canvas.getBoundingClientRect();
-        const anchorX = event.clientX - rect.left;
-        const anchorY = event.clientY - rect.top;
-        zoomDrag = {
-          anchorX,
-          anchorY,
+        // Rotation always pivots about the viewport centre; zoom about the pointer.
+        scrubDrag = {
+          kind: activeTool,
+          anchorX: activeTool === "rotate" ? rect.width / 2 : event.clientX - rect.left,
+          anchorY: activeTool === "rotate" ? rect.height / 2 : event.clientY - rect.top,
           startX: event.clientX,
           lastX: event.clientX,
           alt: event.altKey,
@@ -368,15 +438,21 @@ export default function Index() {
         renderer.camera.pan(dx, dy);
         return;
       }
-      if (zoomDrag) {
-        if (!zoomDrag.dragging) {
-          if (Math.abs(event.clientX - zoomDrag.startX) <= ZOOM_DRAG_THRESHOLD) return;
-          zoomDrag.dragging = true;
-          zoomDrag.lastX = event.clientX;
+      if (scrubDrag) {
+        if (!scrubDrag.dragging) {
+          if (Math.abs(event.clientX - scrubDrag.startX) <= SCRUB_DRAG_THRESHOLD) return;
+          scrubDrag.dragging = true;
+          scrubDrag.lastX = event.clientX;
         }
-        const dx = event.clientX - zoomDrag.lastX;
-        zoomDrag.lastX = event.clientX;
-        if (dx !== 0) renderer.camera.zoomAt(zoomDrag.anchorX, zoomDrag.anchorY, Math.exp(dx * 0.01));
+        const dx = event.clientX - scrubDrag.lastX;
+        scrubDrag.lastX = event.clientX;
+        if (dx !== 0) {
+          if (scrubDrag.kind === "zoom") {
+            renderer.camera.zoomAt(scrubDrag.anchorX, scrubDrag.anchorY, Math.exp(dx * 0.01));
+          } else {
+            renderer.camera.rotateAt(scrubDrag.anchorX, scrubDrag.anchorY, dx * 0.01);
+          }
+        }
         return;
       }
       if (isPainting) {
@@ -389,10 +465,14 @@ export default function Index() {
         panOrigin = null;
         restoreCursor();
       }
-      if (zoomDrag && !zoomDrag.dragging) {
-        renderer.camera.zoomAt(zoomDrag.anchorX, zoomDrag.anchorY, zoomDrag.alt ? 0.5 : 2);
+      if (scrubDrag && !scrubDrag.dragging) {
+        if (scrubDrag.kind === "zoom") {
+          renderer.camera.zoomAt(scrubDrag.anchorX, scrubDrag.anchorY, scrubDrag.alt ? 0.5 : 2);
+        } else {
+          renderer.camera.resetRotation(scrubDrag.anchorX, scrubDrag.anchorY);
+        }
       }
-      zoomDrag = null;
+      scrubDrag = null;
       isPainting = false;
       const completedStroke = stroke;
       stroke = null;
@@ -461,6 +541,10 @@ export default function Index() {
           touchAction: "none",
         }}
       />
+      {/* macOS-style menu bar */}
+      <div style={menuBarStyle}>
+        <MenuBar menus={menus} />
+      </div>
       {/* Top options bar (contextual to the active tool) */}
       <div style={topBarStyle}>
         <span style={{ fontWeight: 700, minWidth: 52 }}>{TOOL_LABELS[tool]}</span>
@@ -506,29 +590,26 @@ export default function Index() {
               <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
             </label>
           </>
-        ) : (
+        ) : tool === "move" ? (
+          <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Drag to pan</span>
+        ) : tool === "zoom" ? (
           <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
-            {tool === "move"
-              ? "Drag to pan"
-              : "Click to zoom in · Alt+click to zoom out · drag horizontally"}
+            Click to zoom in · Alt+click to zoom out · drag horizontally
           </span>
+        ) : (
+          <>
+            <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
+              Drag horizontally to rotate · click to reset
+            </span>
+            <button
+              type="button"
+              style={topBtnStyle}
+              onClick={() => rendererRef.current?.camera.resetRotation()}
+            >
+              Reset rotation
+            </button>
+          </>
         )}
-        <div style={topBarDividerStyle} />
-        <button type="button" style={topBtnStyle} onClick={() => void rendererRef.current?.undo()}>
-          Undo
-        </button>
-        <button type="button" style={topBtnStyle} onClick={() => void rendererRef.current?.redo()}>
-          Redo
-        </button>
-        <div style={topBarDividerStyle} />
-        <label style={{ ...fieldStyle, gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={showGrid}
-            onChange={(event) => setShowGrid(event.target.checked)}
-          />
-          <span style={fieldLabelStyle}>Grid</span>
-        </label>
       </div>
 
       {/* Left tool rail */}
