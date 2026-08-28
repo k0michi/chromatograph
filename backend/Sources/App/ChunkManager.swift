@@ -8,26 +8,49 @@ enum ChunkManagerError: Error, Equatable {
   case selfParent(String, TileChunk)
   case cycle(String)
   case invalidUndoParents(String)
+  case missingPatchPayload(String)
 }
 
 actor ChunkManager {
   static let tileSize = 256
 
+  /// One node of a chunk's operation DAG. Deliberately payload-free: the blend
+  /// image lives in the `ChunkStore` and is pulled in only when a render needs
+  /// it, so per-chunk history costs a few hundred bytes instead of a PNG each.
   private struct Entry {
     let patchHash: String
-    let operation: Operation
+    let chunk: TileChunk
+    let parents: [String]
+    /// `nil` for an undo operation.
+    let blend: BlendParameters?
+
+    var isUndo: Bool { blend == nil }
+    var isBlend: Bool { blend != nil }
   }
 
   private var entriesByChunk: [TileChunkKey: [Entry]] = [:]
-  private var snapshots: [TileChunkKey: [UInt8]] = [:]
+  /// Hot, bounded cache of rasterized (RGBA8) chunk snapshots. Each raster is
+  /// ~256 KiB, so a per-chunk map grows without bound as the canvas expands.
+  /// The authoritative copies are PNGs in the `ChunkStore`; this only keeps the
+  /// working set resident so repeated reads do not re-decode or re-render.
+  private var snapshotCache: LRUCache<TileChunkKey, [UInt8]>
+  /// Hot, bounded cache of full patches (with images) fetched from the store,
+  /// so a render or replay that revisits the same operation avoids re-reading
+  /// and re-parsing the patch file.
+  private var patchCache: LRUCache<String, Patch>
   private var headPatchHashes: [TileChunkKey: String] = [:]
   private var committedHashes: Set<String> = []
-  private var patchesByHash: [String: Patch] = [:]
   private let store: any ChunkStore
   private var isLoaded = false
 
-  init(store: any ChunkStore = MemoryChunkStore()) {
+  init(
+    store: any ChunkStore = MemoryChunkStore(),
+    hotSnapshotCapacity: Int = 32,
+    hotPatchCapacity: Int = 64
+  ) {
     self.store = store
+    self.snapshotCache = LRUCache(capacity: hotSnapshotCapacity)
+    self.patchCache = LRUCache(capacity: hotPatchCapacity)
   }
 
   /// Validates and applies every operation in a patch as one transaction.
@@ -40,11 +63,20 @@ actor ChunkManager {
 
     try validate(patch)
 
+    // Prime the cache so the render below can resolve this patch's own images
+    // before it is written to the store.
+    patchCache.set(patch.hash, patch)
+
     var touched: Set<TileChunkKey> = []
     var candidateEntries = entriesByChunk
     for operation in patch.operations {
       let key = TileChunkKey(operation.chunk)
-      candidateEntries[key, default: []].append(Entry(patchHash: patch.hash, operation: operation))
+      candidateEntries[key, default: []].append(Entry(
+        patchHash: patch.hash,
+        chunk: operation.chunk,
+        parents: operation.parents,
+        blend: operation.blendParameters
+      ))
       touched.insert(key)
     }
     var candidateSnapshots: [TileChunkKey: [UInt8]] = [:]
@@ -66,18 +98,36 @@ actor ChunkManager {
     try store.commit(patch: patch, snapshots: encodedSnapshots)
     entriesByChunk = candidateEntries
     for (key, snapshot) in candidateSnapshots {
-      snapshots[key] = snapshot
+      snapshotCache.set(key, snapshot)
     }
     for snapshot in encodedSnapshots {
       headPatchHashes[TileChunkKey(snapshot.chunk)] = snapshot.headPatchHash
     }
     committedHashes.insert(patch.hash)
-    patchesByHash[patch.hash] = patch
     return encodedSnapshots
   }
 
-  func snapshot(x: Int32, y: Int32) -> [UInt8]? {
-    snapshots[TileChunkKey(x: x, y: y)]
+  func snapshot(x: Int32, y: Int32) throws -> [UInt8]? {
+    try loadIfNeeded()
+    return try rasterizedSnapshot(for: TileChunkKey(x: x, y: y))
+  }
+
+  /// Resolves a chunk's RGBA8 raster from, in order: the hot cache, the on-disk
+  /// PNG snapshot, or a fresh render of the chunk's operation history. Returns
+  /// `nil` for chunks that have never been drawn on. The result is cached.
+  private func rasterizedSnapshot(for key: TileChunkKey) throws -> [UInt8]? {
+    if let cached = snapshotCache.get(key) { return cached }
+    guard let entries = entriesByChunk[key], !entries.isEmpty else { return nil }
+    if let head = headPatchHashes[key],
+      let png = try store.snapshot(x: key.x, y: key.y, headPatchHash: head)
+    {
+      let rgba = try PNGCodec.decode(png).rgba
+      snapshotCache.set(key, rgba)
+      return rgba
+    }
+    let rgba = try render(entries)
+    snapshotCache.set(key, rgba)
+    return rgba
   }
 
   /// Returns a client-side replay base and every partial Patch after that base.
@@ -94,10 +144,10 @@ actor ChunkManager {
     let indexByHash = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($0.element.patchHash, $0.offset) })
     func blendDependencyIndex(_ entry: Entry, visiting: Set<String> = []) throws -> Int? {
       guard !visiting.contains(entry.patchHash) else { throw ChunkManagerError.cycle(entry.patchHash) }
-      if case .blend = entry.operation { return indexByHash[entry.patchHash] }
+      if entry.isBlend { return indexByHash[entry.patchHash] }
       var next = visiting
       next.insert(entry.patchHash)
-      return try entry.operation.parents.compactMap { parent in
+      return try entry.parents.compactMap { parent in
         guard let index = indexByHash[parent] else { return nil }
         return try blendDependencyIndex(ordered[index], visiting: next)
       }.min()
@@ -107,7 +157,7 @@ actor ChunkManager {
     var changed = true
     while changed {
       changed = false
-      for entry in ordered[replayIndex...] where entry.operation.isUndo {
+      for entry in ordered[replayIndex...] where entry.isUndo {
         if let dependency = try blendDependencyIndex(entry), dependency < replayIndex {
           replayIndex = dependency
           changed = true
@@ -117,10 +167,13 @@ actor ChunkManager {
     }
 
     let base = try render(Array(ordered[..<replayIndex]))
-    let patches = ordered[replayIndex...].compactMap { entry -> Patch? in
-      guard let patch = patchesByHash[entry.patchHash] else { return nil }
+    let patches = try ordered[replayIndex...].compactMap { entry -> Patch? in
+      guard let patch = try loadPatch(entry.patchHash) else { return nil }
+      guard let operation = patch.operations.first(where: { $0.chunk == entry.chunk }) else {
+        return nil
+      }
       return Patch(
-        operations: [entry.operation],
+        operations: [operation],
         publicKeyHex: patch.publicKeyHex,
         hash: patch.hash,
         signatureHex: patch.signatureHex
@@ -139,21 +192,22 @@ actor ChunkManager {
     var generated: [ChunkSnapshot] = []
     for key in Set(chunks.map(TileChunkKey.init)).sorted() {
       guard let head = headPatchHashes[key] else { continue }
-      let imageBytes: Data
-      let cached = try store.snapshot(x: key.x, y: key.y, headPatchHash: head)
-      if let cached {
-        imageBytes = cached
-      } else {
-        guard let rgba = snapshots[key] else { continue }
-        imageBytes = try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
+      if let cached = try store.snapshot(x: key.x, y: key.y, headPatchHash: head) {
+        result.append(ChunkSnapshot(
+          chunk: .init(x: key.x, y: key.y),
+          headPatchHash: head,
+          imageBytes: cached
+        ))
+        continue
       }
+      guard let rgba = try rasterizedSnapshot(for: key) else { continue }
       let snapshot = ChunkSnapshot(
         chunk: .init(x: key.x, y: key.y),
         headPatchHash: head,
-        imageBytes: imageBytes
+        imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
       )
       result.append(snapshot)
-      if cached == nil { generated.append(snapshot) }
+      generated.append(snapshot)
     }
     if !generated.isEmpty { try store.storeSnapshots(generated) }
     return result
@@ -166,36 +220,26 @@ actor ChunkManager {
     for patch in state.patches {
       for operation in patch.operations {
         restoredEntries[TileChunkKey(operation.chunk), default: []].append(
-          Entry(patchHash: patch.hash, operation: operation)
+          Entry(
+            patchHash: patch.hash,
+            chunk: operation.chunk,
+            parents: operation.parents,
+            blend: operation.blend
+          )
         )
       }
       committedHashes.insert(patch.hash)
-      patchesByHash[patch.hash] = patch
     }
-    var restoredSnapshots: [TileChunkKey: [UInt8]] = [:]
+    // Only the payload-free DAG index is restored eagerly. Operation images and
+    // rasters are pulled from the store lazily on first render/read, so restoring
+    // a large canvas never holds every chunk's pixels in memory at once.
     var restoredHeadPatchHashes: [TileChunkKey: String] = [:]
-    var generatedSnapshots: [ChunkSnapshot] = []
     for (key, entries) in restoredEntries {
-      let head = try linearize(entries).last?.patchHash
-      if let head, let snapshot = try store.snapshot(x: key.x, y: key.y, headPatchHash: head) {
-        restoredSnapshots[key] = try PNGCodec.decode(snapshot).rgba
+      if let head = try linearize(entries).last?.patchHash {
         restoredHeadPatchHashes[key] = head
-      } else {
-        let rgba = try render(entries)
-        restoredSnapshots[key] = rgba
-        if let head {
-          restoredHeadPatchHashes[key] = head
-          generatedSnapshots.append(ChunkSnapshot(
-            chunk: .init(x: key.x, y: key.y),
-            headPatchHash: head,
-            imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
-          ))
-        }
       }
     }
-    if !generatedSnapshots.isEmpty { try store.storeSnapshots(generatedSnapshots) }
     entriesByChunk = restoredEntries
-    snapshots = restoredSnapshots
     headPatchHashes = restoredHeadPatchHashes
     isLoaded = true
   }
@@ -228,17 +272,37 @@ actor ChunkManager {
   private func render(_ entries: [Entry]) throws -> [UInt8] {
     var rgba = [UInt8](repeating: 0, count: Self.tileSize * Self.tileSize * 4)
     for entry in try resolveActiveBlendEntries(entries) {
-      guard case .blend(let operation) = entry.operation else { continue }
-      let source = try PNGCodec.decode(operation.imageBytes).rgba
+      guard let blend = entry.blend else { continue }
+      guard let imageBytes = try blendImage(patchHash: entry.patchHash, chunk: entry.chunk) else {
+        throw ChunkManagerError.missingPatchPayload(entry.patchHash)
+      }
+      let source = try PNGCodec.decode(imageBytes).rgba
       try Compositor.blend(
         source: source,
         onto: &rgba,
-        opacity: operation.opacity,
-        compositeOp: operation.compositeOp,
-        blendMode: operation.blendMode
+        opacity: blend.opacity,
+        compositeOp: blend.compositeOp,
+        blendMode: blend.blendMode
       )
     }
     return rgba
+  }
+
+  /// Fetches the full patch for `hash`, preferring the hot cache over the store.
+  private func loadPatch(_ hash: String) throws -> Patch? {
+    if let cached = patchCache.get(hash) { return cached }
+    guard let patch = try store.patch(hash: hash) else { return nil }
+    patchCache.set(hash, patch)
+    return patch
+  }
+
+  /// The RGBA8 PNG bytes of the blend operation `patchHash` contributed to `chunk`.
+  private func blendImage(patchHash: String, chunk: TileChunk) throws -> Data? {
+    guard let patch = try loadPatch(patchHash) else { return nil }
+    for operation in patch.operations {
+      if case .blend(let blend) = operation, blend.chunk == chunk { return blend.imageBytes }
+    }
+    return nil
   }
 
   private func linearize(_ entries: [Entry]) throws -> [Entry] {
@@ -246,7 +310,7 @@ actor ChunkManager {
     var children: [String: [Entry]] = [:]
     var parentCount: [String: Int] = [:]
     for entry in entries {
-      let parents = entry.operation.parents.filter { hashes.contains($0) }
+      let parents = entry.parents.filter { hashes.contains($0) }
       parentCount[entry.patchHash] = parents.count
       for parent in parents { children[parent, default: []].append(entry) }
     }
@@ -270,7 +334,7 @@ actor ChunkManager {
     var children: [String: [Entry]] = [:]
     var parentCount: [String: Int] = [:]
     for entry in entries {
-      let parents = entry.operation.parents.filter { hashes.contains($0) }
+      let parents = entry.parents.filter { hashes.contains($0) }
       parentCount[entry.patchHash] = parents.count
       for parent in parents {
         children[parent, default: []].append(entry)
@@ -287,12 +351,12 @@ actor ChunkManager {
     ) throws -> UndoSubject? {
       guard !visiting.contains(hash) else { throw ChunkManagerError.cycle(hash) }
       guard let entry = byHash[hash] else { return nil }
-      if case .blend = entry.operation {
+      if entry.isBlend {
         return UndoSubject(blendHashes: [hash], visible: true)
       }
       var nextVisiting = visiting
       nextVisiting.insert(hash)
-      let subjects = try entry.operation.parents.compactMap {
+      let subjects = try entry.parents.compactMap {
         try resolveUndoSubject($0, visiting: nextVisiting)
       }
       guard let first = subjects.first else { return nil }
@@ -302,8 +366,8 @@ actor ChunkManager {
       return UndoSubject(blendHashes: first.blendHashes, visible: !first.visible)
     }
 
-    for entry in entries where entry.operation.isUndo {
-      let subjects = try entry.operation.parents.compactMap {
+    for entry in entries where entry.isUndo {
+      let subjects = try entry.parents.compactMap {
         try resolveUndoSubject($0)
       }
       guard let first = subjects.first else { continue }
@@ -323,7 +387,7 @@ actor ChunkManager {
       visiting: Set<String>
     ) throws -> [UndoChain] {
       guard !visiting.contains(hash) else { throw ChunkManagerError.cycle(hash) }
-      let undoChildren = (children[hash] ?? []).filter(\.operation.isUndo)
+      let undoChildren = (children[hash] ?? []).filter(\.isUndo)
       guard !undoChildren.isEmpty else {
         return [UndoChain(maximumHash: maximumHash, length: length)]
       }
@@ -360,9 +424,43 @@ actor ChunkManager {
     }
     guard visited.count == entries.count else { throw ChunkManagerError.cycle("unknown") }
     return try ordered.filter { entry in
-      guard case .blend = entry.operation else { return false }
+      guard entry.isBlend else { return false }
       return try isActive(entry.patchHash)
     }
+  }
+}
+
+/// Fixed-capacity most-recently-used cache. Inserting beyond `capacity` evicts
+/// the least recently used entry. All access is serialized by the owning
+/// `ChunkManager` actor, so there is no internal locking. `capacity` is small,
+/// so the O(capacity) recency scan on each access is negligible.
+private struct LRUCache<Key: Hashable, Value> {
+  private let capacity: Int
+  private var storage: [Key: Value] = [:]
+  /// Keys ordered least- to most-recently used.
+  private var recency: [Key] = []
+
+  init(capacity: Int) {
+    self.capacity = max(1, capacity)
+  }
+
+  mutating func get(_ key: Key) -> Value? {
+    guard let value = storage[key] else { return nil }
+    touch(key)
+    return value
+  }
+
+  mutating func set(_ key: Key, _ value: Value) {
+    storage[key] = value
+    touch(key)
+    while recency.count > capacity {
+      storage[recency.removeFirst()] = nil
+    }
+  }
+
+  private mutating func touch(_ key: Key) {
+    if let index = recency.firstIndex(of: key) { recency.remove(at: index) }
+    recency.append(key)
   }
 }
 
@@ -402,5 +500,14 @@ extension Operation {
   fileprivate var isUndo: Bool {
     if case .undo = self { return true }
     return false
+  }
+
+  fileprivate var blendParameters: BlendParameters? {
+    guard case .blend(let operation) = self else { return nil }
+    return BlendParameters(
+      compositeOp: operation.compositeOp,
+      blendMode: operation.blendMode,
+      opacity: operation.opacity
+    )
   }
 }

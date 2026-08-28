@@ -81,8 +81,8 @@ struct ChunkManagerTests {
       try await manager.apply(
         patch(hash: hash("10"), operations: [.blend(valid), .blend(invalid)]))
     }
-    #expect(await manager.snapshot(x: 0, y: 0) == nil)
-    #expect(await manager.snapshot(x: 1, y: 0) == nil)
+    #expect(try await manager.snapshot(x: 0, y: 0) == nil)
+    #expect(try await manager.snapshot(x: 1, y: 0) == nil)
   }
 
   @Test
@@ -94,7 +94,7 @@ struct ChunkManagerTests {
         hash: parentHash,
         operation: .blend(try blendOperation(color: PNG.RGBA<UInt8>(255, 0, 0, 255)))
       ))
-    let before = await manager.snapshot(x: 0, y: 0)
+    let before = try await manager.snapshot(x: 0, y: 0)
 
     await #expect(
       throws: ChunkManagerError.missingParent(parentHash, TileChunk(x: 1, y: 0))
@@ -109,8 +109,8 @@ struct ChunkManagerTests {
             ))
         ))
     }
-    #expect(await manager.snapshot(x: 0, y: 0) == before)
-    #expect(await manager.snapshot(x: 1, y: 0) == nil)
+    #expect(try await manager.snapshot(x: 0, y: 0) == before)
+    #expect(try await manager.snapshot(x: 1, y: 0) == nil)
   }
 
   @Test
@@ -127,7 +127,7 @@ struct ChunkManagerTests {
             .undo(UndoOperation(chunk: chunk, parents: [])),
           ]))
     }
-    #expect(await manager.snapshot(x: 0, y: 0) == nil)
+    #expect(try await manager.snapshot(x: 0, y: 0) == nil)
   }
 
   @Test
@@ -156,7 +156,7 @@ struct ChunkManagerTests {
           try blendOperation(color: PNG.RGBA<UInt8>(255, 0, 0, 255))
         )
       ))
-    #expect(await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
+    #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
 
     let undoHash = hash("20")
     try await manager.apply(
@@ -166,7 +166,7 @@ struct ChunkManagerTests {
           UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [blendHash])
         )
       ))
-    #expect(await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
+    #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
 
     try await manager.apply(
       patch(
@@ -175,7 +175,7 @@ struct ChunkManagerTests {
           UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [undoHash])
         )
       ))
-    #expect(await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
+    #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
   }
 
   @Test
@@ -213,7 +213,7 @@ struct ChunkManagerTests {
         )
       ))
 
-    #expect(await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
+    #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
   }
 
   @Test
