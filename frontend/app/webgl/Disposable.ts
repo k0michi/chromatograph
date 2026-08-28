@@ -1,4 +1,6 @@
+import SymbolHelper from "~/polyfills/SymbolHelper";
+
 export interface Disposable {
   dispose(): void;
-  [Symbol.dispose](): void;
+  [SymbolHelper.dispose](): void;
 }

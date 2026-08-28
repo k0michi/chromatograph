@@ -1,5 +1,6 @@
 import type { Patch } from "~/canvas/Patch";
 import { PatchDecoder, PatchEncoder } from "~/canvas/serializePatch";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import { ChunkReplayPacketDecoder, type ChunkReplay } from "./ChunkReplayPacket";
 import { SnapshotPacketDecoder, type ChunkSnapshotPacket } from "./SnapshotPacket";
 import { containsChunk, sameChunkViewport, type ChunkCoordinate, type ChunkViewport } from "./ChunkViewport";
@@ -212,7 +213,7 @@ export class Client implements Disposable {
     }
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.close();
   }
 

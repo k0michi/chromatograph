@@ -1,4 +1,5 @@
 import type { Disposable } from "./Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import type { Texture } from "./Texture";
 
 export interface FramebufferDescriptor {
@@ -146,7 +147,7 @@ export class Framebuffer implements Disposable {
     this.gl.deleteFramebuffer(this.handle);
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }

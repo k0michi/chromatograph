@@ -2,6 +2,7 @@ import type { mat3 } from "gl-matrix";
 import { resolveBlendFactor, type BlendFactor } from "./BlendFactor";
 import type { BindGroupLayout } from "./BindGroupLayout";
 import type { Disposable } from "./Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import { resolvePrimitiveTopology, type PrimitiveTopology } from "./PrimitiveTopology";
 import type { Shader } from "./Shader";
 import { resolveVertexFormat, type VertexFormat } from "./VertexFormat";
@@ -150,7 +151,7 @@ export class RenderPipeline implements Disposable {
     this.gl.deleteProgram(this.handle);
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }

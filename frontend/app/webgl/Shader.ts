@@ -1,4 +1,5 @@
 import type { Disposable } from "./Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import { resolveShaderStage, type ShaderStage } from "./ShaderStage";
 
 export interface ShaderDescriptor {
@@ -32,7 +33,7 @@ export class Shader implements Disposable {
     this.gl.deleteShader(this.handle);
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }
