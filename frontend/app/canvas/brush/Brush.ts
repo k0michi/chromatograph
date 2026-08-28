@@ -12,6 +12,8 @@ export interface BrushSettings {
   color: string;
   opacity: number;
   spacing: number;
+  /** Screen-space input smoothing strength (0 = raw, 1 = strongest). */
+  smoothing: number;
   /** How strongly pen pressure scales the stamp size (0 = off, 1 = full range). */
   pressureSize: number;
   /** How strongly pen pressure scales the stamp opacity (0 = off, 1 = full range). */

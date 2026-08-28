@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
+import { StrokeSmoother, type ScreenStrokePoint } from "~/canvas/brush/StrokeSmoother";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
 import { CanvasRulers, type CanvasRulersHandle } from "~/canvas/CanvasRulers";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
@@ -180,6 +181,7 @@ export default function Index() {
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
   const [spacing, setSpacing] = useState(0.1);
+  const [smoothing, setSmoothing] = useState(0.5);
   const [penPressureSize, setPenPressureSize] = useState(true);
   const [penPressureOpacity, setPenPressureOpacity] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
@@ -267,10 +269,11 @@ export default function Index() {
     brush.settings.hardness = hardness;
     brush.settings.opacity = opacity;
     brush.settings.spacing = spacing;
+    brush.settings.smoothing = smoothing;
     brush.settings.compositeOp = compositeOp;
     brush.settings.pressureSize = penPressureSize ? 1 : 0;
     brush.settings.pressureOpacity = penPressureOpacity ? 1 : 0;
-  }, [color, size, hardness, opacity, spacing, compositeOp, penPressureSize, penPressureOpacity]);
+  }, [color, size, hardness, opacity, spacing, smoothing, compositeOp, penPressureSize, penPressureOpacity]);
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
@@ -354,11 +357,13 @@ export default function Index() {
       color,
       opacity,
       spacing,
+      smoothing,
       pressureSize: penPressureSize ? 1 : 0,
       pressureOpacity: penPressureOpacity ? 1 : 0,
     });
     brushRef.current = brush;
     let stroke: BrushStroke | null = null;
+    let strokeSmoother: StrokeSmoother | null = null;
 
     let animationFrame: number | null = null;
     const renderFrame = (timestamp: number) => {
@@ -397,9 +402,14 @@ export default function Index() {
       canvas.style.cursor = isSpaceHeldRef.current ? "grab" : cursorForTool(toolRef.current);
     };
 
-    const worldFromEvent = (event: PointerEvent) => {
+    const screenPointFromEvent = (event: PointerEvent): ScreenStrokePoint => {
       const rect = canvas.getBoundingClientRect();
-      return renderer.camera.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+        pressure: pressureFromEvent(event),
+        time: event.timeStamp,
+      };
     };
 
     // Only pens report a meaningful pressure; mouse/touch always paint at full.
@@ -468,9 +478,18 @@ export default function Index() {
         return;
       }
       isPainting = true;
-      const world = worldFromEvent(event);
       stroke = new BrushStroke(renderer, brush);
-      stroke.begin(world.x, world.y, pressureFromEvent(event));
+      let firstPoint = true;
+      strokeSmoother = new StrokeSmoother(brush.settings.smoothing, (point) => {
+        const world = renderer.camera.screenToWorld(point.x, point.y);
+        if (firstPoint) {
+          stroke?.begin(world.x, world.y, point.pressure);
+          firstPoint = false;
+        } else {
+          stroke?.moveTo(world.x, world.y, point.pressure);
+        }
+      });
+      strokeSmoother.begin(screenPointFromEvent(event));
     };
     const onPointerMove = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -514,8 +533,9 @@ export default function Index() {
         return;
       }
       if (isPainting) {
-        const world = worldFromEvent(event);
-        stroke?.moveTo(world.x, world.y, pressureFromEvent(event));
+        const coalesced = event.getCoalescedEvents?.();
+        const samples = coalesced?.length ? coalesced : [event];
+        for (const sample of samples) strokeSmoother?.add(screenPointFromEvent(sample));
       }
     };
     const onPointerUp = (event: PointerEvent) => {
@@ -532,6 +552,8 @@ export default function Index() {
       }
       scrubDrag = null;
       isPainting = false;
+      strokeSmoother?.end();
+      strokeSmoother = null;
       const completedStroke = stroke;
       stroke = null;
       completedStroke?.end().catch((error: unknown) => {
@@ -659,6 +681,19 @@ export default function Index() {
                 onChange={(event) => setSpacing(Number(event.target.value))}
               />
               <span style={fieldValueStyle}>{`${Math.round(spacing * 100)}%`}</span>
+            </label>
+            <label style={fieldStyle}>
+              <span style={fieldLabelStyle}>Smoothing</span>
+              <input
+                type="range"
+                style={rangeStyle}
+                min={0}
+                max={1}
+                step={0.01}
+                value={smoothing}
+                onChange={(event) => setSmoothing(Number(event.target.value))}
+              />
+              <span style={fieldValueStyle}>{smoothing.toFixed(2)}</span>
             </label>
             <div style={topBarDividerStyle} />
             <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Pen</span>

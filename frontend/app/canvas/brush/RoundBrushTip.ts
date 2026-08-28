@@ -1,12 +1,9 @@
+import MathHelper from "~/math/MathHelper";
 import type { BrushMask, BrushTip } from "./BrushTip";
-
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
 
 /** Cubic smoothstep */
 function smoothstep(t: number): number {
-  const x = clamp01(t);
+  const x = MathHelper.clamp(t, 0, 1);
   return x * x * (3 - 2 * x);
 }
 
@@ -16,7 +13,7 @@ export class RoundBrushTip implements BrushTip {
     const alpha = new Uint8ClampedArray(diameter * diameter);
 
     const radius = diameter / 2;
-    const innerRadius = radius * clamp01(hardness);
+    const innerRadius = radius * MathHelper.clamp(hardness, 0, 1);
     const falloff = Math.max(radius - innerRadius, 0.5);
 
     for (let y = 0; y < diameter; y++) {
