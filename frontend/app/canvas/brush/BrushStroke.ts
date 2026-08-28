@@ -43,7 +43,7 @@ function chunkKey(chunkX: number, chunkY: number): string {
 }
 
 export class BrushStroke {
-  private lastStampPoint: { x: number; y: number } | null = null;
+  private lastStampPoint: { x: number; y: number; pressure: number } | null = null;
   private readonly touchedChunks = new Map<string, ChunkAccumulation>();
   private readonly compositeOp: CompositeOp;
 
@@ -54,33 +54,51 @@ export class BrushStroke {
     this.compositeOp = brush.settings.compositeOp;
   }
 
-  begin(worldX: number, worldY: number): void {
-    this.lastStampPoint = { x: worldX, y: worldY };
-    this.stampAt(worldX, worldY);
+  begin(worldX: number, worldY: number, pressure = 1): void {
+    this.lastStampPoint = { x: worldX, y: worldY, pressure };
+    this.stampAt(worldX, worldY, pressure);
   }
 
-  moveTo(worldX: number, worldY: number): void {
+  moveTo(worldX: number, worldY: number, pressure = 1): void {
     if (!this.lastStampPoint) {
-      this.begin(worldX, worldY);
+      this.begin(worldX, worldY, pressure);
       return;
     }
 
-    const spacing = Math.max(1, this.brush.settings.size * this.brush.settings.spacing);
     let lastX = this.lastStampPoint.x;
     let lastY = this.lastStampPoint.y;
-    let distance = Math.hypot(worldX - lastX, worldY - lastY);
+    const startPressure = this.lastStampPoint.pressure;
+    const totalDistance = Math.hypot(worldX - lastX, worldY - lastY);
+    let distance = totalDistance;
+    let walked = 0;
 
-    while (distance >= spacing) {
-      const t = spacing / distance;
+    const pressureAt = (fraction: number) =>
+      startPressure + (pressure - startPressure) * (totalDistance > 0 ? fraction : 1);
+
+    // Guard against a runaway loop if spacing is ever computed as ~0.
+    for (let iterations = 0; iterations < 100000; iterations++) {
+      const nextPressure = pressureAt(totalDistance > 0 ? walked / totalDistance : 1);
+      const step = this.spacingFor(nextPressure);
+      if (distance < step) break;
+      const t = step / distance;
       const stampX = lastX + (worldX - lastX) * t;
       const stampY = lastY + (worldY - lastY) * t;
-      this.stampAt(stampX, stampY);
+      walked += Math.hypot(stampX - lastX, stampY - lastY);
+      this.stampAt(stampX, stampY, pressureAt(walked / totalDistance));
       lastX = stampX;
       lastY = stampY;
       distance = Math.hypot(worldX - lastX, worldY - lastY);
     }
 
-    this.lastStampPoint = { x: lastX, y: lastY };
+    this.lastStampPoint = { x: lastX, y: lastY, pressure: pressureAt(totalDistance > 0 ? walked / totalDistance : 1) };
+  }
+
+  /** Distance between stamps for a given pressure, based on the effective (pressure-scaled) size. */
+  private spacingFor(pressure: number): number {
+    const { size, spacing, pressureSize } = this.brush.settings;
+    const clamped = Math.min(1, Math.max(0, pressure));
+    const effectiveSize = Math.max(1, size * (1 - pressureSize * (1 - clamped)));
+    return Math.max(0.5, effectiveSize * spacing);
   }
 
   async end(): Promise<void> {
@@ -119,24 +137,29 @@ export class BrushStroke {
     }
   }
 
-  private stampAt(worldX: number, worldY: number): void {
+  private stampAt(worldX: number, worldY: number, pressure = 1): void {
     const { texture: stampTexture } = this.brush.getStamp(this.renderer);
-    const { size, opacity } = this.brush.settings;
+    const { size, opacity, pressureSize, pressureOpacity } = this.brush.settings;
 
-    const minChunkX = Math.floor((worldX - size / 2) / TILE_SIZE);
-    const maxChunkX = Math.floor((worldX + size / 2) / TILE_SIZE);
-    const minChunkY = Math.floor((worldY - size / 2) / TILE_SIZE);
-    const maxChunkY = Math.floor((worldY + size / 2) / TILE_SIZE);
+    const clampedPressure = Math.min(1, Math.max(0, pressure));
+    const sizeFactor = 1 - pressureSize * (1 - clampedPressure);
+    const stampSize = Math.max(1, size * sizeFactor);
+    const stampOpacity = opacity * (1 - pressureOpacity * (1 - clampedPressure));
+
+    const minChunkX = Math.floor((worldX - stampSize / 2) / TILE_SIZE);
+    const maxChunkX = Math.floor((worldX + stampSize / 2) / TILE_SIZE);
+    const minChunkY = Math.floor((worldY - stampSize / 2) / TILE_SIZE);
+    const maxChunkY = Math.floor((worldY + stampSize / 2) / TILE_SIZE);
 
     for (let chunkY = minChunkY; chunkY <= maxChunkY; chunkY++) {
       for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
         const accumulation = this.getOrCreateAccumulation(chunkX, chunkY);
-        const localX = worldX - chunkX * TILE_SIZE - size / 2;
-        const localY = worldY - chunkY * TILE_SIZE - size / 2;
-        const model = mat3.fromValues(size, 0, 0, 0, size, 0, localX, localY, 1);
+        const localX = worldX - chunkX * TILE_SIZE - stampSize / 2;
+        const localY = worldY - chunkY * TILE_SIZE - stampSize / 2;
+        const model = mat3.fromValues(stampSize, 0, 0, 0, stampSize, 0, localX, localY, 1);
         const mvp = mat3.multiply(mat3.create(), CHUNK_VIEW_PROJECTION, model);
 
-        accumulation.source.composite(stampTexture, mvp, opacity);
+        accumulation.source.composite(stampTexture, mvp, stampOpacity);
         this.updatePreview(accumulation);
       }
     }

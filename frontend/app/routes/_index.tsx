@@ -179,6 +179,9 @@ export default function Index() {
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
+  const [spacing, setSpacing] = useState(0.1);
+  const [penPressureSize, setPenPressureSize] = useState(true);
+  const [penPressureOpacity, setPenPressureOpacity] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [showRulers, setShowRulers] = useState(true);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
@@ -263,8 +266,11 @@ export default function Index() {
     brush.settings.size = size;
     brush.settings.hardness = hardness;
     brush.settings.opacity = opacity;
+    brush.settings.spacing = spacing;
     brush.settings.compositeOp = compositeOp;
-  }, [color, size, hardness, opacity, compositeOp]);
+    brush.settings.pressureSize = penPressureSize ? 1 : 0;
+    brush.settings.pressureOpacity = penPressureOpacity ? 1 : 0;
+  }, [color, size, hardness, opacity, spacing, compositeOp, penPressureSize, penPressureOpacity]);
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
@@ -347,7 +353,9 @@ export default function Index() {
       hardness,
       color,
       opacity,
-      spacing: 0.15,
+      spacing,
+      pressureSize: penPressureSize ? 1 : 0,
+      pressureOpacity: penPressureOpacity ? 1 : 0,
     });
     brushRef.current = brush;
     let stroke: BrushStroke | null = null;
@@ -392,6 +400,10 @@ export default function Index() {
       const rect = canvas.getBoundingClientRect();
       return renderer.camera.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
     };
+
+    // Only pens report a meaningful pressure; mouse/touch always paint at full.
+    const pressureFromEvent = (event: PointerEvent) =>
+      event.pointerType === "pen" ? event.pressure : 1;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") {
@@ -456,7 +468,7 @@ export default function Index() {
       isPainting = true;
       const world = worldFromEvent(event);
       stroke = new BrushStroke(renderer, brush);
-      stroke.begin(world.x, world.y);
+      stroke.begin(world.x, world.y, pressureFromEvent(event));
     };
     const onPointerMove = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -491,7 +503,7 @@ export default function Index() {
       }
       if (isPainting) {
         const world = worldFromEvent(event);
-        stroke?.moveTo(world.x, world.y);
+        stroke?.moveTo(world.x, world.y, pressureFromEvent(event));
       }
     };
     const onPointerUp = (event: PointerEvent) => {
@@ -622,6 +634,37 @@ export default function Index() {
                 onChange={(event) => setOpacity(Number(event.target.value))}
               />
               <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
+            </label>
+            <label style={fieldStyle}>
+              <span style={fieldLabelStyle}>Spacing</span>
+              <input
+                type="range"
+                style={rangeStyle}
+                min={0.01}
+                max={1}
+                step={0.01}
+                value={spacing}
+                onChange={(event) => setSpacing(Number(event.target.value))}
+              />
+              <span style={fieldValueStyle}>{`${Math.round(spacing * 100)}%`}</span>
+            </label>
+            <div style={topBarDividerStyle} />
+            <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Pen</span>
+            <label style={{ ...fieldStyle, gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={penPressureSize}
+                onChange={(event) => setPenPressureSize(event.target.checked)}
+              />
+              <span style={fieldLabelStyle}>Size</span>
+            </label>
+            <label style={{ ...fieldStyle, gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={penPressureOpacity}
+                onChange={(event) => setPenPressureOpacity(event.target.checked)}
+              />
+              <span style={fieldLabelStyle}>Opacity</span>
             </label>
           </>
         ) : tool === "move" ? (

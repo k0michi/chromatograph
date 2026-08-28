@@ -12,6 +12,10 @@ export interface BrushSettings {
   color: string;
   opacity: number;
   spacing: number;
+  /** How strongly pen pressure scales the stamp size (0 = off, 1 = full range). */
+  pressureSize: number;
+  /** How strongly pen pressure scales the stamp opacity (0 = off, 1 = full range). */
+  pressureOpacity: number;
 }
 
 const HEX_COLOR_PATTERN = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i;
