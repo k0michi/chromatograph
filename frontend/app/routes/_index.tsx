@@ -217,6 +217,17 @@ export default function Index() {
         },
         { separator: true, label: "" },
         {
+          label: "Flip Horizontal",
+          checked: () => Boolean(rendererRef.current?.camera.flipX),
+          onSelect: () => rendererRef.current?.camera.toggleFlipX(),
+        },
+        {
+          label: "Flip Vertical",
+          checked: () => Boolean(rendererRef.current?.camera.flipY),
+          onSelect: () => rendererRef.current?.camera.toggleFlipY(),
+        },
+        { separator: true, label: "" },
+        {
           label: "Reset Rotation",
           onSelect: () => rendererRef.current?.camera.resetRotation(),
         },

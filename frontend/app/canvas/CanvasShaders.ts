@@ -93,12 +93,13 @@ uniform vec2 uViewportSize;
 uniform vec2 uCameraPosition;
 uniform float uZoom;
 uniform float uRotation;
+uniform vec2 uFlip;
 uniform float uGridSize;
 out vec4 outColor;
 
 void main() {
   vec2 screen = gl_FragCoord.xy - uViewportSize * 0.5;
-  vec2 q = vec2(screen.x, -screen.y) / uZoom;
+  vec2 q = vec2(screen.x * uFlip.x, -screen.y * uFlip.y) / uZoom;
   float cs = cos(uRotation);
   float sn = sin(uRotation);
   vec2 world = uCameraPosition + vec2(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);

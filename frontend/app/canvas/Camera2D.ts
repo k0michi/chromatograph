@@ -10,6 +10,10 @@ export class Camera2D {
   zoom: number;
   /** Clockwise roll in radians, applied around the viewport centre. */
   rotation = 0;
+  /** Mirror the view left-to-right about the viewport centre. */
+  flipX = false;
+  /** Mirror the view top-to-bottom about the viewport centre. */
+  flipY = false;
   private viewportWidth = 1;
   private viewportHeight = 1;
 
@@ -31,11 +35,26 @@ export class Camera2D {
 
   pan(screenDx: number, screenDy: number): void {
     if (screenDx === 0 && screenDy === 0) return;
-    // Move the camera along its rotated screen axes so dragging tracks the pointer.
+    // Move the camera along its rotated (and possibly mirrored) screen axes so
+    // dragging tracks the pointer.
     const cos = Math.cos(this.rotation);
     const sin = Math.sin(this.rotation);
-    this.x -= (cos * screenDx + sin * screenDy) / this.zoom;
-    this.y -= (-sin * screenDx + cos * screenDy) / this.zoom;
+    const dx = (this.flipX ? -1 : 1) * screenDx;
+    const dy = (this.flipY ? -1 : 1) * screenDy;
+    this.x -= (cos * dx + sin * dy) / this.zoom;
+    this.y -= (-sin * dx + cos * dy) / this.zoom;
+    this.onChange();
+  }
+
+  /** Toggle the left-to-right mirror, keeping the viewport centre fixed. */
+  toggleFlipX(): void {
+    this.flipX = !this.flipX;
+    this.onChange();
+  }
+
+  /** Toggle the top-to-bottom mirror, keeping the viewport centre fixed. */
+  toggleFlipY(): void {
+    this.flipY = !this.flipY;
     this.onChange();
   }
 
@@ -67,8 +86,10 @@ export class Camera2D {
   }
 
   screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
-    const offsetX = (screenX - this.viewportWidth / 2) / this.zoom;
-    const offsetY = (screenY - this.viewportHeight / 2) / this.zoom;
+    const offsetX =
+      ((screenX - this.viewportWidth / 2) / this.zoom) * (this.flipX ? -1 : 1);
+    const offsetY =
+      ((screenY - this.viewportHeight / 2) / this.zoom) * (this.flipY ? -1 : 1);
     const cos = Math.cos(this.rotation);
     const sin = Math.sin(this.rotation);
     return {
@@ -104,8 +125,8 @@ export class Camera2D {
   }
 
   getViewProjectionMatrix(): mat3 {
-    const scaleX = this.zoom / (this.viewportWidth / 2);
-    const scaleY = -this.zoom / (this.viewportHeight / 2);
+    const scaleX = (this.flipX ? -1 : 1) * this.zoom / (this.viewportWidth / 2);
+    const scaleY = (this.flipY ? -1 : 1) * -this.zoom / (this.viewportHeight / 2);
     const cos = Math.cos(this.rotation);
     const sin = Math.sin(this.rotation);
     // Rotate (world - camera) in screen pixels, then scale to clip space.

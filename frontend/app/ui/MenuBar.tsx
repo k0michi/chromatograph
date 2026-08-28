@@ -4,7 +4,7 @@ export interface MenuBarItem {
   readonly label: string;
   readonly onSelect?: () => void;
   readonly disabled?: boolean | (() => boolean);
-  readonly checked?: boolean;
+  readonly checked?: boolean | (() => boolean);
   readonly separator?: boolean;
   readonly shortcut?: string;
 }
@@ -99,6 +99,8 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
                   }
                   const disabled =
                     typeof item.disabled === "function" ? item.disabled() : Boolean(item.disabled);
+                  const checked =
+                    typeof item.checked === "function" ? item.checked() : Boolean(item.checked);
                   return (
                     <button
                       key={itemIndex}
@@ -131,7 +133,7 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
                         opacity: disabled ? 0.4 : 1,
                       }}
                     >
-                      <span style={{ width: 12, flexShrink: 0 }}>{item.checked ? "✓" : ""}</span>
+                      <span style={{ width: 12, flexShrink: 0 }}>{checked ? "✓" : ""}</span>
                       <span style={{ flex: 1 }}>{item.label}</span>
                       {item.shortcut && (
                         <span style={{ color: "var(--text-muted)" }}>{item.shortcut}</span>

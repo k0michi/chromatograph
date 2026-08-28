@@ -620,6 +620,11 @@ export class CanvasRenderer {
       gridPass.setUniformFloat2("uCameraPosition", this.camera.x, this.camera.y);
       gridPass.setUniformFloat("uZoom", this.camera.zoom * (window.devicePixelRatio || 1));
       gridPass.setUniformFloat("uRotation", this.camera.rotation);
+      gridPass.setUniformFloat2(
+        "uFlip",
+        this.camera.flipX ? -1 : 1,
+        this.camera.flipY ? -1 : 1,
+      );
       gridPass.setUniformFloat("uGridSize", TILE_SIZE);
       gridPass.draw(this.quad.vertexCount);
       gridPass.end();
