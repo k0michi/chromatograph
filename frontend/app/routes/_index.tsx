@@ -17,6 +17,26 @@ export function meta(_args: Route.MetaArgs) {
   return [{ title: "Chromatograph" }];
 }
 
+type Tool = "brush" | "eraser" | "move" | "zoom";
+
+const TOOL_LABELS: Record<Tool, string> = {
+  brush: "Brush",
+  eraser: "Eraser",
+  move: "Move",
+  zoom: "Zoom",
+};
+
+function cursorForTool(tool: Tool): string {
+  return tool === "move" ? "grab" : tool === "zoom" ? "zoom-in" : "crosshair";
+}
+
+const TOOL_RAIL: readonly { id: Tool; glyph: string; shortcut: string }[] = [
+  { id: "brush", glyph: "B", shortcut: "B" },
+  { id: "eraser", glyph: "E", shortcut: "E" },
+  { id: "move", glyph: "M", shortcut: "H" },
+  { id: "zoom", glyph: "Z", shortcut: "Z" },
+];
+
 const topBarStyle: React.CSSProperties = {
   position: "fixed",
   top: 0,
@@ -129,14 +149,19 @@ export default function Index() {
   const cursorNeedsInspectionRef = useRef(false);
 
   const [color, setColor] = useState("#222222");
-  const [compositeOp, setCompositeOp] = useState(CompositeOp.SourceOver);
+  const [tool, setTool] = useState<Tool>("brush");
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
   const [showGrid, setShowGrid] = useState(false);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
 
-  const isEraser = compositeOp === CompositeOp.DestinationOut;
+  const isEraser = tool === "eraser";
+  const isPaintTool = tool === "brush" || tool === "eraser";
+  const compositeOp = isEraser ? CompositeOp.DestinationOut : CompositeOp.SourceOver;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const isSpaceHeldRef = useRef(false);
 
   useEffect(() => {
     const brush = brushRef.current;
@@ -153,6 +178,13 @@ export default function Index() {
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
   }, [showGrid]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (isSpaceHeldRef.current) return;
+    canvas.style.cursor = cursorForTool(tool);
+  }, [tool]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -242,9 +274,16 @@ export default function Index() {
     resizeObserver.observe(canvas);
     scheduleRender();
 
+    const ZOOM_DRAG_THRESHOLD = 4;
     let panOrigin: { x: number; y: number } | null = null;
+    let zoomDrag:
+      | { anchorX: number; anchorY: number; startX: number; lastX: number; alt: boolean; dragging: boolean }
+      | null = null;
     let isPainting = false;
-    let isSpaceHeld = false;
+
+    const restoreCursor = () => {
+      canvas.style.cursor = isSpaceHeldRef.current ? "grab" : cursorForTool(toolRef.current);
+    };
 
     const worldFromEvent = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -253,16 +292,18 @@ export default function Index() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") {
-        isSpaceHeld = true;
+        if (!isSpaceHeldRef.current) {
+          isSpaceHeldRef.current = true;
+          canvas.style.cursor = panOrigin ? "grabbing" : "grab";
+        }
         return;
       }
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "b") {
-        setCompositeOp(CompositeOp.SourceOver);
-        return;
-      }
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "e") {
-        setCompositeOp(CompositeOp.DestinationOut);
-        return;
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        const key = event.key.toLowerCase();
+        if (key === "b") return setTool("brush");
+        if (key === "e") return setTool("eraser");
+        if (key === "h" || key === "v") return setTool("move");
+        if (key === "z") return setTool("zoom");
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -280,15 +321,32 @@ export default function Index() {
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.code === "Space") {
-        isSpaceHeld = false;
+        isSpaceHeldRef.current = false;
+        if (!panOrigin) restoreCursor();
       }
     };
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       canvas.setPointerCapture(event.pointerId);
-      if (isSpaceHeld) {
+      const activeTool = toolRef.current;
+      if (isSpaceHeldRef.current || activeTool === "move") {
         panOrigin = { x: event.clientX, y: event.clientY };
+        canvas.style.cursor = "grabbing";
+        return;
+      }
+      if (activeTool === "zoom") {
+        const rect = canvas.getBoundingClientRect();
+        const anchorX = event.clientX - rect.left;
+        const anchorY = event.clientY - rect.top;
+        zoomDrag = {
+          anchorX,
+          anchorY,
+          startX: event.clientX,
+          lastX: event.clientX,
+          alt: event.altKey,
+          dragging: false,
+        };
         return;
       }
       isPainting = true;
@@ -310,13 +368,31 @@ export default function Index() {
         renderer.camera.pan(dx, dy);
         return;
       }
+      if (zoomDrag) {
+        if (!zoomDrag.dragging) {
+          if (Math.abs(event.clientX - zoomDrag.startX) <= ZOOM_DRAG_THRESHOLD) return;
+          zoomDrag.dragging = true;
+          zoomDrag.lastX = event.clientX;
+        }
+        const dx = event.clientX - zoomDrag.lastX;
+        zoomDrag.lastX = event.clientX;
+        if (dx !== 0) renderer.camera.zoomAt(zoomDrag.anchorX, zoomDrag.anchorY, Math.exp(dx * 0.01));
+        return;
+      }
       if (isPainting) {
         const world = worldFromEvent(event);
         stroke?.moveTo(world.x, world.y);
       }
     };
     const onPointerUp = (event: PointerEvent) => {
-      panOrigin = null;
+      if (panOrigin) {
+        panOrigin = null;
+        restoreCursor();
+      }
+      if (zoomDrag && !zoomDrag.dragging) {
+        renderer.camera.zoomAt(zoomDrag.anchorX, zoomDrag.anchorY, zoomDrag.alt ? 0.5 : 2);
+      }
+      zoomDrag = null;
       isPainting = false;
       const completedStroke = stroke;
       stroke = null;
@@ -387,48 +463,56 @@ export default function Index() {
       />
       {/* Top options bar (contextual to the active tool) */}
       <div style={topBarStyle}>
-        <span style={{ fontWeight: 700, opacity: 0.85, minWidth: 56 }}>
-          {isEraser ? "Eraser" : "Brush"}
-        </span>
+        <span style={{ fontWeight: 700, minWidth: 52 }}>{TOOL_LABELS[tool]}</span>
         <div style={topBarDividerStyle} />
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Size</span>
-          <input
-            type="range"
-            style={rangeStyle}
-            min={2}
-            max={200}
-            value={size}
-            onChange={(event) => setSize(Number(event.target.value))}
-          />
-          <span style={fieldValueStyle}>{size}</span>
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Hardness</span>
-          <input
-            type="range"
-            style={rangeStyle}
-            min={0}
-            max={1}
-            step={0.01}
-            value={hardness}
-            onChange={(event) => setHardness(Number(event.target.value))}
-          />
-          <span style={fieldValueStyle}>{hardness.toFixed(2)}</span>
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Opacity</span>
-          <input
-            type="range"
-            style={rangeStyle}
-            min={0}
-            max={1}
-            step={0.01}
-            value={opacity}
-            onChange={(event) => setOpacity(Number(event.target.value))}
-          />
-          <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
-        </label>
+        {isPaintTool ? (
+          <>
+            <label style={fieldStyle}>
+              <span style={fieldLabelStyle}>Size</span>
+              <input
+                type="range"
+                style={rangeStyle}
+                min={2}
+                max={200}
+                value={size}
+                onChange={(event) => setSize(Number(event.target.value))}
+              />
+              <span style={fieldValueStyle}>{size}</span>
+            </label>
+            <label style={fieldStyle}>
+              <span style={fieldLabelStyle}>Hardness</span>
+              <input
+                type="range"
+                style={rangeStyle}
+                min={0}
+                max={1}
+                step={0.01}
+                value={hardness}
+                onChange={(event) => setHardness(Number(event.target.value))}
+              />
+              <span style={fieldValueStyle}>{hardness.toFixed(2)}</span>
+            </label>
+            <label style={fieldStyle}>
+              <span style={fieldLabelStyle}>Opacity</span>
+              <input
+                type="range"
+                style={rangeStyle}
+                min={0}
+                max={1}
+                step={0.01}
+                value={opacity}
+                onChange={(event) => setOpacity(Number(event.target.value))}
+              />
+              <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
+            </label>
+          </>
+        ) : (
+          <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
+            {tool === "move"
+              ? "Drag to pan"
+              : "Click to zoom in · Alt+click to zoom out · drag horizontally"}
+          </span>
+        )}
         <div style={topBarDividerStyle} />
         <button type="button" style={topBtnStyle} onClick={() => void rendererRef.current?.undo()}>
           Undo
@@ -449,24 +533,18 @@ export default function Index() {
 
       {/* Left tool rail */}
       <div style={toolRailStyle}>
-        <button
-          type="button"
-          title="Brush (B)"
-          aria-pressed={!isEraser}
-          style={toolButtonStyle(!isEraser)}
-          onClick={() => setCompositeOp(CompositeOp.SourceOver)}
-        >
-          B
-        </button>
-        <button
-          type="button"
-          title="Eraser (E)"
-          aria-pressed={isEraser}
-          style={toolButtonStyle(isEraser)}
-          onClick={() => setCompositeOp(CompositeOp.DestinationOut)}
-        >
-          E
-        </button>
+        {TOOL_RAIL.map(({ id, glyph, shortcut }) => (
+          <button
+            key={id}
+            type="button"
+            title={`${TOOL_LABELS[id]} (${shortcut})`}
+            aria-pressed={tool === id}
+            style={toolButtonStyle(tool === id)}
+            onClick={() => setTool(id)}
+          >
+            {glyph}
+          </button>
+        ))}
         <div style={toolRailDividerStyle} />
         <label
           title="Color"
