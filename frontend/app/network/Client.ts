@@ -8,6 +8,7 @@ import { createPatchOutbox, type PatchOutbox } from "./PatchOutbox";
 type SnapshotListener = (snapshots: readonly ChunkSnapshotPacket[]) => void;
 type PatchListener = (patch: Patch) => void;
 type PacketLogListener = (entry: NetworkPacketLogEntry) => void;
+type ConnectionStateListener = (state: WebSocketConnectionState) => void;
 type WebSocketFactory = (url: string) => WebSocket;
 type Fetch = (input: URL, init?: RequestInit) => Promise<Response>;
 
@@ -29,13 +30,17 @@ export interface NetworkPacketLogEntry {
   readonly detail: string;
 }
 
+export type WebSocketConnectionState = "disconnected" | "connected";
+
 export class Client implements Disposable {
   private static readonly connecting = 0;
   private static readonly open = 1;
   private readonly snapshotListeners = new Set<SnapshotListener>();
   private readonly patchListeners = new Set<PatchListener>();
   private readonly packetLogListeners = new Set<PacketLogListener>();
+  private readonly connectionStateListeners = new Set<ConnectionStateListener>();
   private packetLogSequence = 0;
+  private connectionState: WebSocketConnectionState = "disconnected";
   private socket: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
   private readonly patchOutbox: PatchOutbox;
@@ -62,6 +67,7 @@ export class Client implements Disposable {
     this.closedByClient = false;
     if (this.isConnected) return Promise.resolve();
     if (this.connectPromise) return this.connectPromise;
+    this.setConnectionState("disconnected");
 
     const createWebSocket = this.options.createWebSocket ?? ((url) => new WebSocket(url));
     const socket = createWebSocket(this.url("/ws", "websocket").href);
@@ -75,6 +81,7 @@ export class Client implements Disposable {
         didOpen = true;
         this.connectPromise = null;
         this.clearReconnectTimer();
+        this.setConnectionState("connected");
         void this.flushOutbox(socket).catch((error: unknown) => this.options.onError?.(error));
         resolve();
       };
@@ -92,8 +99,11 @@ export class Client implements Disposable {
           this.socket = null;
           this.connectPromise = null;
         }
+        this.setConnectionState("disconnected");
         this.options.onClose?.(event);
-        if (!this.closedByClient) this.scheduleReconnect();
+        if (!this.closedByClient) {
+          this.scheduleReconnect();
+        }
         if (!didOpen) reject(new Error(`Patch WebSocket closed before connecting (${event.code}).`));
       };
       socket.onmessage = (event) => this.receive(event.data);
@@ -184,12 +194,19 @@ export class Client implements Disposable {
     return () => this.packetLogListeners.delete(listener);
   }
 
+  subscribeConnectionState(listener: ConnectionStateListener): () => void {
+    this.connectionStateListeners.add(listener);
+    listener(this.connectionState);
+    return () => this.connectionStateListeners.delete(listener);
+  }
+
   close(code = 1000, reason = "Client closed"): void {
     this.closedByClient = true;
     this.clearReconnectTimer();
     const socket = this.socket;
     this.socket = null;
     this.connectPromise = null;
+    this.setConnectionState("disconnected");
     if (socket && (socket.readyState === Client.open || socket.readyState === Client.connecting)) {
       socket.close(code, reason);
     }
@@ -275,6 +292,7 @@ export class Client implements Disposable {
 
   private scheduleReconnect(delay = this.options.reconnectDelayMs ?? 1_000): void {
     if (this.closedByClient || this.isConnected || this.connectPromise || this.reconnectTimer) return;
+    this.setConnectionState("disconnected");
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connect().catch((error: unknown) => {
@@ -309,5 +327,11 @@ export class Client implements Disposable {
 
   private shortHash(hash: string): string {
     return `${hash.slice(0, 12)}…`;
+  }
+
+  private setConnectionState(state: WebSocketConnectionState): void {
+    if (this.connectionState === state) return;
+    this.connectionState = state;
+    for (const listener of this.connectionStateListeners) listener(state);
   }
 }

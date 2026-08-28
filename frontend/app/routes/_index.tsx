@@ -61,6 +61,9 @@ export default function Index() {
     const unsubscribePacketLogs = client.subscribePacketLogs((entry) => {
       networkDebugRef.current?.append(entry);
     });
+    const unsubscribeConnectionState = client.subscribeConnectionState((state) => {
+      networkDebugRef.current?.setConnectionState(state);
+    });
     const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
     renderer.render();
@@ -246,6 +249,7 @@ export default function Index() {
       unsubscribeSnapshots();
       unsubscribeCanvasContentRendered();
       unsubscribePacketLogs();
+      unsubscribeConnectionState();
       client.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

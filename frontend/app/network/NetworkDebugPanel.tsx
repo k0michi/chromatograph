@@ -1,12 +1,18 @@
 import { forwardRef, useImperativeHandle, useState } from "react";
-import type { NetworkPacketLogEntry } from "./Client";
+import type { NetworkPacketLogEntry, WebSocketConnectionState } from "./Client";
 
 const DEFAULT_VISIBLE_COUNT = 50;
 const RETAINED_ENTRY_COUNT = 500;
 
 export interface NetworkDebugPanelHandle {
   append(entry: NetworkPacketLogEntry): void;
+  setConnectionState(state: WebSocketConnectionState): void;
 }
+
+const CONNECTION_STATE_VIEW: Record<WebSocketConnectionState, { readonly label: string; readonly color: string }> = {
+  disconnected: { label: "Disconnected", color: "#f87171" },
+  connected: { label: "Connected", color: "#4ade80" },
+};
 
 function formatBytes(byteLength: number): string {
   if (byteLength < 1024) return `${byteLength} B`;
@@ -16,14 +22,17 @@ function formatBytes(byteLength: number): string {
 export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function NetworkDebugPanel(_, ref) {
   const [entries, setEntries] = useState<readonly NetworkPacketLogEntry[]>([]);
   const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_COUNT);
+  const [connectionState, setConnectionState] = useState<WebSocketConnectionState>("disconnected");
 
   useImperativeHandle(ref, () => ({
     append(entry) {
       setEntries((current) => [...current, entry].slice(-RETAINED_ENTRY_COUNT));
     },
+    setConnectionState,
   }), []);
 
   const visibleEntries = entries.slice(-visibleCount).reverse();
+  const connectionView = CONNECTION_STATE_VIEW[connectionState];
 
   return (
     <div
@@ -48,6 +57,13 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <strong style={{ marginRight: "auto" }}>Network</strong>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <span
+            aria-hidden="true"
+            style={{ width: 7, height: 7, borderRadius: "50%", background: connectionView.color }}
+          />
+          WebSocket: {connectionView.label}
+        </span>
         <label>
           Latest{" "}
           <input

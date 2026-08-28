@@ -44,17 +44,23 @@ describe("Client", () => {
     const socket = new MockWebSocket();
     const listener = vi.fn();
     const packetLogger = vi.fn();
+    const connectionStateListener = vi.fn();
     const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
     });
     client.subscribeSnapshots(listener);
     client.subscribePacketLogs(packetLogger);
+    client.subscribeConnectionState(connectionStateListener);
     client.setViewport({ minX: 10, minY: -6, maxX: 13, maxY: -4 });
 
     const connecting = client.connect();
     socket.open();
     await connecting;
     expect(socket.binaryType).toBe("arraybuffer");
+    expect(connectionStateListener.mock.calls.map(([state]) => state)).toEqual([
+      "disconnected",
+      "connected",
+    ]);
 
     await client.send(patch);
     expect(socket.sent[0]).toEqual(PatchEncoder.encode(patch));
