@@ -286,6 +286,7 @@ struct ChunkManagerTests {
     ))
     let recomputed = try await managerWithoutCache.latestSnapshots(for: [.init(x: 0, y: 0)])
     #expect(try PNGCodec.decode(recomputed[0].imageBytes).rgba.prefix(4) == [255, 0, 0, 255])
+    #expect(FileManager.default.fileExists(atPath: snapshotFile.path))
   }
 }
 

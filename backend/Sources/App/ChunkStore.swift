@@ -7,12 +7,14 @@ struct StoredChunkState: Sendable {
 protocol ChunkStore: Sendable {
   func load() throws -> StoredChunkState
   func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data?
+  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws
   func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws
 }
 
 struct MemoryChunkStore: ChunkStore {
   func load() throws -> StoredChunkState { .init(patches: []) }
   func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data? { nil }
+  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws {}
   func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws {}
 }
 
@@ -41,12 +43,10 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
   func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data? {
     let url = snapshotURL(x: x, y: y, headPatchHash: headPatchHash)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
-    return try Data(contentsOf: url)
+    return try Data(contentsOf: url, options: .mappedIfSafe)
   }
 
-  func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws {
-    // Snapshot files are written first. The atomic Patch write is the commit point;
-    // snapshots left by an interrupted write are harmless cache entries.
+  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws {
     for snapshot in snapshots {
       let directory = snapshotDirectory
         .appending(path: String(snapshot.chunk.x), directoryHint: .isDirectory)
@@ -61,6 +61,12 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
         options: .atomic
       )
     }
+  }
+
+  func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws {
+    // Snapshot files are written first. The atomic Patch write is the commit point;
+    // snapshots left by an interrupted write are harmless cache entries.
+    try storeSnapshots(snapshots)
     try PatchPacketCodec.encode(patch).write(
       to: patchesDirectory.appending(path: "\(patch.hash).patch"),
       options: .atomic

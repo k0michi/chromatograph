@@ -19,7 +19,8 @@ enum SnapshotPacketCodec {
     guard let count = UInt32(exactly: snapshots.count) else {
       throw SnapshotPacketCodecError.packetTooLarge
     }
-    var writer = SnapshotPacketWriter()
+    let capacity = snapshots.reduce(8) { $0 + 44 + $1.imageBytes.count }
+    var writer = SnapshotPacketWriter(capacity: capacity)
     writer.append(packetVersion)
     writer.append(count)
     for snapshot in snapshots {
@@ -70,7 +71,12 @@ enum SnapshotPacketCodec {
 }
 
 private struct SnapshotPacketWriter {
-  var data = Data()
+  var data: Data
+
+  init(capacity: Int = 0) {
+    data = Data()
+    data.reserveCapacity(capacity)
+  }
 
   mutating func append(_ value: UInt32) {
     var value = value.bigEndian

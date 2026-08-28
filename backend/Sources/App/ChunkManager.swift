@@ -20,6 +20,7 @@ actor ChunkManager {
 
   private var entriesByChunk: [TileChunkKey: [Entry]] = [:]
   private var snapshots: [TileChunkKey: [UInt8]] = [:]
+  private var headPatchHashes: [TileChunkKey: String] = [:]
   private var committedHashes: Set<String> = []
   private var patchesByHash: [String: Patch] = [:]
   private let store: any ChunkStore
@@ -66,6 +67,9 @@ actor ChunkManager {
     entriesByChunk = candidateEntries
     for (key, snapshot) in candidateSnapshots {
       snapshots[key] = snapshot
+    }
+    for snapshot in encodedSnapshots {
+      headPatchHashes[TileChunkKey(snapshot.chunk)] = snapshot.headPatchHash
     }
     committedHashes.insert(patch.hash)
     patchesByHash[patch.hash] = patch
@@ -131,15 +135,28 @@ actor ChunkManager {
 
   func latestSnapshots(for chunks: [TileChunk]) throws -> [ChunkSnapshot] {
     try loadIfNeeded()
-    return try Set(chunks.map(TileChunkKey.init)).sorted().compactMap { key in
-      guard let rgba = snapshots[key], let entries = entriesByChunk[key] else { return nil }
-      guard let head = try linearize(entries).last?.patchHash else { return nil }
-      return ChunkSnapshot(
+    var result: [ChunkSnapshot] = []
+    var generated: [ChunkSnapshot] = []
+    for key in Set(chunks.map(TileChunkKey.init)).sorted() {
+      guard let head = headPatchHashes[key] else { continue }
+      let imageBytes: Data
+      let cached = try store.snapshot(x: key.x, y: key.y, headPatchHash: head)
+      if let cached {
+        imageBytes = cached
+      } else {
+        guard let rgba = snapshots[key] else { continue }
+        imageBytes = try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
+      }
+      let snapshot = ChunkSnapshot(
         chunk: .init(x: key.x, y: key.y),
         headPatchHash: head,
-        imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
+        imageBytes: imageBytes
       )
+      result.append(snapshot)
+      if cached == nil { generated.append(snapshot) }
     }
+    if !generated.isEmpty { try store.storeSnapshots(generated) }
+    return result
   }
 
   private func loadIfNeeded() throws {
@@ -156,16 +173,30 @@ actor ChunkManager {
       patchesByHash[patch.hash] = patch
     }
     var restoredSnapshots: [TileChunkKey: [UInt8]] = [:]
+    var restoredHeadPatchHashes: [TileChunkKey: String] = [:]
+    var generatedSnapshots: [ChunkSnapshot] = []
     for (key, entries) in restoredEntries {
       let head = try linearize(entries).last?.patchHash
       if let head, let snapshot = try store.snapshot(x: key.x, y: key.y, headPatchHash: head) {
         restoredSnapshots[key] = try PNGCodec.decode(snapshot).rgba
+        restoredHeadPatchHashes[key] = head
       } else {
-        restoredSnapshots[key] = try render(entries)
+        let rgba = try render(entries)
+        restoredSnapshots[key] = rgba
+        if let head {
+          restoredHeadPatchHashes[key] = head
+          generatedSnapshots.append(ChunkSnapshot(
+            chunk: .init(x: key.x, y: key.y),
+            headPatchHash: head,
+            imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
+          ))
+        }
       }
     }
+    if !generatedSnapshots.isEmpty { try store.storeSnapshots(generatedSnapshots) }
     entriesByChunk = restoredEntries
     snapshots = restoredSnapshots
+    headPatchHashes = restoredHeadPatchHashes
     isLoaded = true
   }
 
