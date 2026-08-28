@@ -37,27 +37,18 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
   return (
     <div
       style={{
-        position: "fixed",
-        left: 12,
-        bottom: 12,
-        width: "min(32rem, calc(100vw - 24px))",
-        maxHeight: "min(20rem, calc(100vh - 24px))",
+        width: "100%",
         display: "flex",
         flexDirection: "column",
         boxSizing: "border-box",
-        padding: 10,
-        border: "1px solid rgba(255, 255, 255, 0.18)",
-        borderRadius: 6,
-        background: "rgba(10, 12, 14, 0.88)",
-        color: "white",
+        color: "var(--text)",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,
         lineHeight: 1.45,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <strong style={{ marginRight: "auto" }}>Network</strong>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, marginRight: "auto" }}>
           <span
             aria-hidden="true"
             style={{ width: 7, height: 7, borderRadius: "50%", background: connectionView.color }}
@@ -84,7 +75,7 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
           Clear
         </button>
       </div>
-      <div style={{ minHeight: 24, overflowY: "auto" }}>
+      <div style={{ minHeight: 24, maxHeight: 240, overflowY: "auto", overflowX: "auto" }}>
         {visibleEntries.length === 0 ? (
           <div style={{ opacity: 0.6 }}>No packets</div>
         ) : visibleEntries.map((entry) => (
@@ -95,7 +86,7 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
               gridTemplateColumns: "5.5rem 1rem 7.5rem 4.5rem minmax(0, 1fr)",
               gap: 6,
               padding: "2px 0",
-              borderTop: "1px solid rgba(255, 255, 255, 0.06)",
+              borderTop: "1px solid var(--hairline)",
               whiteSpace: "nowrap",
             }}
           >

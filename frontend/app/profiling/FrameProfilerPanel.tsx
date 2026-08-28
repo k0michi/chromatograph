@@ -31,16 +31,9 @@ export const FrameProfilerPanel = forwardRef<FrameProfilerPanelHandle>(function 
   return (
     <div
       style={{
-        position: "fixed",
-        top: 12,
-        right: 12,
-        width: "min(20rem, calc(100vw - 24px))",
+        width: "100%",
         boxSizing: "border-box",
-        padding: 10,
-        border: "1px solid rgba(255, 255, 255, 0.18)",
-        borderRadius: 6,
-        background: "rgba(10, 12, 14, 0.82)",
-        color: "white",
+        color: "var(--text)",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,
         lineHeight: 1.45,

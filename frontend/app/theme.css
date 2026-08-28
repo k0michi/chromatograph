@@ -1,0 +1,43 @@
+:root {
+  color-scheme: light dark;
+
+  --panel-bg: #17171b;
+  --panel-bg-elevated: #101214;
+  --panel-header-bg: #26262b;
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-border-strong: rgba(255, 255, 255, 0.14);
+  --text: #ffffff;
+  --text-muted: rgba(255, 255, 255, 0.6);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --control-bg: rgba(255, 255, 255, 0.08);
+  --control-bg-hover: rgba(255, 255, 255, 0.14);
+  --accent: #6ea8ff;
+  --accent-bg: rgba(110, 168, 255, 0.25);
+  --hud-fg: #ffffff;
+  --hud-shadow: rgba(0, 0, 0, 0.9);
+  --graph-bg: rgba(0, 0, 0, 0.45);
+  --graph-grid: rgba(255, 255, 255, 0.16);
+  --graph-label: rgba(255, 255, 255, 0.65);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --panel-bg: #f1f1f3;
+    --panel-bg-elevated: #ffffff;
+    --panel-header-bg: #e4e4e8;
+    --panel-border: rgba(0, 0, 0, 0.1);
+    --panel-border-strong: rgba(0, 0, 0, 0.18);
+    --text: #1a1a1e;
+    --text-muted: rgba(0, 0, 0, 0.55);
+    --hairline: rgba(0, 0, 0, 0.08);
+    --control-bg: rgba(0, 0, 0, 0.06);
+    --control-bg-hover: rgba(0, 0, 0, 0.12);
+    --accent: #2563eb;
+    --accent-bg: rgba(37, 99, 235, 0.16);
+    --hud-fg: #1a1a1e;
+    --hud-shadow: rgba(255, 255, 255, 0.9);
+    --graph-bg: rgba(0, 0, 0, 0.05);
+    --graph-grid: rgba(0, 0, 0, 0.16);
+    --graph-label: rgba(0, 0, 0, 0.6);
+  }
+}

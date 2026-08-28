@@ -8,6 +8,7 @@ import {
 } from "react-router";
 import { useEffect } from "react";
 import "modern-normalize";
+import "./theme.css";
 
 import { registerServiceWorker } from "~/pwa/registerServiceWorker";
 import type { Route } from "./+types/root";

@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
@@ -9,10 +10,112 @@ import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
 import { NetworkDebugPanel, type NetworkDebugPanelHandle } from "~/network/NetworkDebugPanel";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
+import { PanelWindow } from "~/ui/PanelWindow";
 import type { Route } from "./+types/_index";
 
 export function meta(_args: Route.MetaArgs) {
   return [{ title: "Chromatograph" }];
+}
+
+const topBarStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  height: 44,
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  padding: "0 14px",
+  background: "var(--panel-bg)",
+  borderBottom: "1px solid var(--panel-border)",
+  color: "var(--text)",
+  fontFamily: "sans-serif",
+  fontSize: 12,
+  zIndex: 20,
+  overflowX: "auto",
+  whiteSpace: "nowrap",
+};
+
+const topBarDividerStyle: React.CSSProperties = {
+  width: 1,
+  height: 24,
+  background: "var(--panel-border-strong)",
+  flexShrink: 0,
+};
+
+const fieldStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 };
+const rangeStyle: React.CSSProperties = { width: 96 };
+const fieldLabelStyle: React.CSSProperties = { color: "var(--text-muted)" };
+const fieldValueStyle: React.CSSProperties = {
+  minWidth: 30,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+};
+
+const topBtnStyle: React.CSSProperties = {
+  background: "var(--control-bg)",
+  color: "var(--text)",
+  border: "1px solid var(--panel-border-strong)",
+  borderRadius: 5,
+  padding: "4px 10px",
+  cursor: "pointer",
+  fontSize: 12,
+  flexShrink: 0,
+};
+
+const toolRailStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 44,
+  left: 0,
+  bottom: 0,
+  width: 52,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 0",
+  background: "var(--panel-bg)",
+  borderRight: "1px solid var(--panel-border)",
+  zIndex: 20,
+};
+
+const toolRailDividerStyle: React.CSSProperties = {
+  width: 28,
+  height: 1,
+  background: "var(--panel-border-strong)",
+  margin: "2px 0",
+};
+
+const sidebarStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 44,
+  right: 0,
+  bottom: 0,
+  width: 300,
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: 8,
+  background: "var(--panel-bg)",
+  borderLeft: "1px solid var(--panel-border)",
+  overflowY: "auto",
+  zIndex: 20,
+};
+
+function toolButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    border: active ? "1px solid var(--accent)" : "1px solid var(--panel-border-strong)",
+    background: active ? "var(--accent-bg)" : "var(--control-bg)",
+    color: "var(--text)",
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
+  };
 }
 
 export default function Index() {
@@ -32,6 +135,8 @@ export default function Index() {
   const [opacity, setOpacity] = useState(1);
   const [showGrid, setShowGrid] = useState(false);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
+
+  const isEraser = compositeOp === CompositeOp.DestinationOut;
 
   useEffect(() => {
     const brush = brushRef.current;
@@ -280,110 +385,133 @@ export default function Index() {
           touchAction: "none",
         }}
       />
-      <div
-        style={{
-          position: "fixed",
-          top: 16,
-          left: 16,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          padding: 12,
-          borderRadius: 8,
-          background: "rgba(20, 20, 24, 0.8)",
-          color: "white",
-          fontFamily: "sans-serif",
-          fontSize: 12,
-        }}
-      >
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            aria-pressed={compositeOp === CompositeOp.SourceOver}
-            style={{ fontWeight: compositeOp === CompositeOp.SourceOver ? 700 : 400 }}
-            onClick={() => setCompositeOp(CompositeOp.SourceOver)}
-          >
-            Brush (B)
-          </button>
-          <button
-            type="button"
-            aria-pressed={compositeOp === CompositeOp.DestinationOut}
-            style={{ fontWeight: compositeOp === CompositeOp.DestinationOut ? 700 : 400 }}
-            onClick={() => setCompositeOp(CompositeOp.DestinationOut)}
-          >
-            Eraser (E)
-          </button>
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          Color
-          <input type="color" value={color} onChange={(event) => setColor(event.target.value)} />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          Size ({size})
+      {/* Top options bar (contextual to the active tool) */}
+      <div style={topBarStyle}>
+        <span style={{ fontWeight: 700, opacity: 0.85, minWidth: 56 }}>
+          {isEraser ? "Eraser" : "Brush"}
+        </span>
+        <div style={topBarDividerStyle} />
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>Size</span>
           <input
             type="range"
+            style={rangeStyle}
             min={2}
             max={200}
             value={size}
             onChange={(event) => setSize(Number(event.target.value))}
           />
+          <span style={fieldValueStyle}>{size}</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          Hardness ({hardness.toFixed(2)})
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>Hardness</span>
           <input
             type="range"
+            style={rangeStyle}
             min={0}
             max={1}
             step={0.01}
             value={hardness}
             onChange={(event) => setHardness(Number(event.target.value))}
           />
+          <span style={fieldValueStyle}>{hardness.toFixed(2)}</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          Opacity ({opacity.toFixed(2)})
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>Opacity</span>
           <input
             type="range"
+            style={rangeStyle}
             min={0}
             max={1}
             step={0.01}
             value={opacity}
             onChange={(event) => setOpacity(Number(event.target.value))}
           />
+          <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
         </label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={() => void rendererRef.current?.undo()}>
-            Undo
-          </button>
-          <button type="button" onClick={() => void rendererRef.current?.redo()}>
-            Redo
-          </button>
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={topBarDividerStyle} />
+        <button type="button" style={topBtnStyle} onClick={() => void rendererRef.current?.undo()}>
+          Undo
+        </button>
+        <button type="button" style={topBtnStyle} onClick={() => void rendererRef.current?.redo()}>
+          Redo
+        </button>
+        <div style={topBarDividerStyle} />
+        <label style={{ ...fieldStyle, gap: 6 }}>
           <input
             type="checkbox"
             checked={showGrid}
             onChange={(event) => setShowGrid(event.target.checked)}
           />
-          Grid
+          <span style={fieldLabelStyle}>Grid</span>
         </label>
-        <span style={{ opacity: 0.7 }}>B brush · E eraser · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
-      <FrameProfilerPanel ref={profilerRef} />
-      <NetworkDebugPanel ref={networkDebugRef} />
+
+      {/* Left tool rail */}
+      <div style={toolRailStyle}>
+        <button
+          type="button"
+          title="Brush (B)"
+          aria-pressed={!isEraser}
+          style={toolButtonStyle(!isEraser)}
+          onClick={() => setCompositeOp(CompositeOp.SourceOver)}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          title="Eraser (E)"
+          aria-pressed={isEraser}
+          style={toolButtonStyle(isEraser)}
+          onClick={() => setCompositeOp(CompositeOp.DestinationOut)}
+        >
+          E
+        </button>
+        <div style={toolRailDividerStyle} />
+        <label
+          title="Color"
+          style={{
+            position: "relative",
+            width: 36,
+            height: 36,
+            borderRadius: 6,
+            border: "2px solid rgba(255, 255, 255, 0.35)",
+            background: color,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="color"
+            value={color}
+            onChange={(event) => setColor(event.target.value)}
+            style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+          />
+        </label>
+      </div>
+      {/* Right sidebar (docked panels; will become movable windows later) */}
+      <aside style={sidebarStyle}>
+        <PanelWindow title="Inspector">
+          <CursorInspectorPanel inspection={cursorInspection} />
+        </PanelWindow>
+        <PanelWindow title="Performance">
+          <FrameProfilerPanel ref={profilerRef} />
+        </PanelWindow>
+        <PanelWindow title="Network" defaultCollapsed>
+          <NetworkDebugPanel ref={networkDebugRef} />
+        </PanelWindow>
+      </aside>
+
+      {/* Scale bar HUD over the canvas */}
       <div
         style={{
           position: "fixed",
-          right: 12,
+          left: 64,
           bottom: 12,
           display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
-          gap: 12,
           pointerEvents: "none",
         }}
       >
         <CanvasScaleBar ref={scaleBarRef} />
-        <CursorInspectorPanel inspection={cursorInspection} />
       </div>
     </>
   );

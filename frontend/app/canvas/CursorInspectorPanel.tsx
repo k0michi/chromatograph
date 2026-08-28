@@ -22,13 +22,9 @@ export function CursorInspectorPanel({ inspection }: CursorInspectorPanelProps) 
   return (
     <div
       style={{
-        width: "min(20rem, calc(100vw - 24px))",
+        width: "100%",
         boxSizing: "border-box",
-        padding: 10,
-        border: "1px solid rgba(255, 255, 255, 0.18)",
-        borderRadius: 6,
-        background: "rgba(10, 12, 14, 0.82)",
-        color: "white",
+        color: "var(--text)",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,
         lineHeight: 1.55,
@@ -52,7 +48,7 @@ export function CursorInspectorPanel({ inspection }: CursorInspectorPanelProps) 
               width: 40,
               height: 40,
               alignSelf: "center",
-              border: "1px solid rgba(255, 255, 255, 0.45)",
+              border: "1px solid var(--panel-border-strong)",
               background: swatch,
             }}
           />

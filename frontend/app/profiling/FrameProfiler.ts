@@ -69,8 +69,12 @@ export class FrameProfiler {
     if (!context) return;
 
     const { width, height } = graph;
+    const styles = getComputedStyle(graph);
+    const graphBg = styles.getPropertyValue("--graph-bg").trim() || "rgba(0, 0, 0, 0.45)";
+    const graphGrid = styles.getPropertyValue("--graph-grid").trim() || "rgba(255, 255, 255, 0.16)";
+    const graphLabel = styles.getPropertyValue("--graph-label").trim() || "rgba(255, 255, 255, 0.65)";
     context.clearRect(0, 0, width, height);
-    context.fillStyle = "rgba(0, 0, 0, 0.45)";
+    context.fillStyle = graphBg;
     context.fillRect(0, 0, width, height);
 
     let maximumDelay = TARGET_FRAME_MS;
@@ -79,7 +83,7 @@ export class FrameProfiler {
     }
     const graphMaximum = Math.ceil(maximumDelay / 4) * 4;
 
-    context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    context.strokeStyle = graphGrid;
     context.beginPath();
     context.moveTo(0, height - 0.5);
     context.lineTo(width, height - 0.5);
@@ -98,7 +102,7 @@ export class FrameProfiler {
     }
     context.stroke();
 
-    context.fillStyle = "rgba(255, 255, 255, 0.65)";
+    context.fillStyle = graphLabel;
     context.font = "9px ui-monospace, monospace";
     context.fillText(`${graphMaximum} ms`, 4, 10);
   }
