@@ -2,6 +2,7 @@ import type { Buffer } from "~/webgl/Buffer";
 import { BufferUsage } from "~/webgl/BufferUsage";
 import type { Device } from "~/webgl/Device";
 import type { Disposable } from "~/webgl/Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 
 export class QuadGeometry implements Disposable {
   readonly buffer: Buffer;
@@ -22,7 +23,7 @@ export class QuadGeometry implements Disposable {
     this.buffer.dispose();
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }

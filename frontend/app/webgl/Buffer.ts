@@ -1,5 +1,6 @@
 import { BufferUsage, hasBufferUsage } from "./BufferUsage";
 import type { Disposable } from "./Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 
 export interface BufferDescriptor {
   data: BufferSource;
@@ -40,7 +41,7 @@ export class Buffer implements Disposable {
     this.gl.deleteBuffer(this.handle);
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }

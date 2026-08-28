@@ -1,4 +1,5 @@
 import type { Patch } from "~/canvas/Patch";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import { PatchDecoder, PatchEncoder } from "~/canvas/serializePatch";
 
 type PatchListener = (patch: Patch) => void;
@@ -105,7 +106,7 @@ export class PatchWebSocketClient implements Disposable {
     }
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.close();
   }
 

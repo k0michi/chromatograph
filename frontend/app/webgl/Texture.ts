@@ -1,5 +1,6 @@
 import { resolveAddressMode, type AddressMode } from "./AddressMode";
 import type { Disposable } from "./Disposable";
+import SymbolHelper from "~/polyfills/SymbolHelper";
 import { resolveFilterMode, type FilterMode } from "./FilterMode";
 import type { MipmapFilterMode } from "./MipmapFilterMode";
 import { resolveTextureFormat, type TextureFormat } from "./TextureFormat";
@@ -97,7 +98,7 @@ export class Texture implements Disposable {
     this.gl.deleteTexture(this.handle);
   }
 
-  [Symbol.dispose](): void {
+  [SymbolHelper.dispose](): void {
     this.dispose();
   }
 }
