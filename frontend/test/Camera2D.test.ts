@@ -31,6 +31,30 @@ describe("Camera2D", () => {
     expect(anchorAfter.y).toBeCloseTo(anchorBefore.y, 6);
   });
 
+  it("round-trips screen <-> world with flip and rotation combined", () => {
+    const camera = new Camera2D(12, 8, 1.3);
+    camera.resize(900, 500);
+    camera.rotation = -0.7;
+    camera.toggleFlipX();
+    camera.toggleFlipY();
+
+    const world = camera.screenToWorld(640, 210);
+    const m = camera.getViewProjectionMatrix();
+    const clipX = m[0] * world.x + m[3] * world.y + m[6];
+    const clipY = m[1] * world.x + m[4] * world.y + m[7];
+    expect((clipX + 1) * 0.5 * 900).toBeCloseTo(640, 4);
+    expect((1 - clipY) * 0.5 * 500).toBeCloseTo(210, 4);
+  });
+
+  it("mirrors the x axis when flipX is toggled", () => {
+    const camera = new Camera2D(0, 0, 1);
+    camera.resize(400, 400);
+    const right = camera.screenToWorld(300, 200).x;
+    camera.toggleFlipX();
+    const mirrored = camera.screenToWorld(300, 200).x;
+    expect(mirrored).toBeCloseTo(-right, 6);
+  });
+
   it("resetRotation returns roll to zero", () => {
     const camera = new Camera2D(10, 10, 1);
     camera.resize(640, 480);

@@ -228,7 +228,20 @@ export default function Index() {
         },
         { separator: true, label: "" },
         {
+          label: "Rotate 90°",
+          onSelect: () => rendererRef.current?.camera.rotateBy(Math.PI / 2),
+        },
+        {
+          label: "Rotate 180°",
+          onSelect: () => rendererRef.current?.camera.rotateBy(Math.PI),
+        },
+        {
+          label: "Rotate 270°",
+          onSelect: () => rendererRef.current?.camera.rotateBy(-Math.PI / 2),
+        },
+        {
           label: "Reset Rotation",
+          disabled: () => (rendererRef.current?.camera.rotation ?? 0) === 0,
           onSelect: () => rendererRef.current?.camera.resetRotation(),
         },
       ],

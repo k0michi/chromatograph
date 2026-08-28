@@ -80,6 +80,15 @@ export class Camera2D {
     this.onChange();
   }
 
+  /** Rotate by `deltaRadians`, pivoting about the given screen point (centre by default). */
+  rotateBy(
+    deltaRadians: number,
+    screenX = this.viewportWidth / 2,
+    screenY = this.viewportHeight / 2,
+  ): void {
+    this.rotateAt(screenX, screenY, deltaRadians);
+  }
+
   /** Reset roll to zero, keeping the given screen point anchored. */
   resetRotation(screenX = this.viewportWidth / 2, screenY = this.viewportHeight / 2): void {
     this.rotateAt(screenX, screenY, -this.rotation);
