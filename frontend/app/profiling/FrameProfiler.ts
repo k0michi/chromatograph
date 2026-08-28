@@ -1,5 +1,6 @@
 const TARGET_FRAME_MS = 1000 / 60;
 const HISTORY_SIZE = 120;
+const IDLE_THRESHOLD_MS = 250;
 
 export interface FrameProfilerElements {
   readonly graph: HTMLCanvasElement;
@@ -13,12 +14,16 @@ export class FrameProfiler {
   private previousTimestamp: number | null = null;
   private writeIndex = 0;
   private sampleCount = 0;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly elements: FrameProfilerElements) { }
 
   sample(timestamp: number, renderTimeMs: number): void {
+    this.scheduleIdleState();
     if (this.previousTimestamp === null) {
       this.previousTimestamp = timestamp;
+      this.elements.fps.textContent = "Rendering";
+      this.elements.renderTime.textContent = `Render ${renderTimeMs.toFixed(2)} ms`;
       return;
     }
 
@@ -34,6 +39,20 @@ export class FrameProfiler {
     this.elements.delay.textContent = `Delay ${delay.toFixed(2)} ms`;
     this.elements.renderTime.textContent = `Render ${renderTimeMs.toFixed(2)} ms`;
     this.drawGraph();
+  }
+
+  dispose(): void {
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
+  }
+
+  private scheduleIdleState(): void {
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      this.previousTimestamp = null;
+      this.elements.fps.textContent = "Idle";
+      this.elements.delay.textContent = "Delay -- ms";
+    }, IDLE_THRESHOLD_MS);
   }
 
   private averageDelay(): number {

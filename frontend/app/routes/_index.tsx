@@ -66,7 +66,6 @@ export default function Index() {
     });
     const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
-    renderer.render();
     void client.connect().catch((error: unknown) => {
       console.error("Failed to connect Patch WebSocket:", error);
     });
@@ -121,13 +120,22 @@ export default function Index() {
     brushRef.current = brush;
     let stroke: BrushStroke | null = null;
 
-    let animationFrame = requestAnimationFrame(function loop(timestamp) {
+    let animationFrame: number | null = null;
+    const renderFrame = (timestamp: number) => {
+      animationFrame = null;
       const renderStart = performance.now();
       renderer.render();
       scaleBarRef.current?.update(renderer.camera.zoom);
       profilerRef.current?.sample(timestamp, performance.now() - renderStart);
-      animationFrame = requestAnimationFrame(loop);
-    });
+    };
+    const scheduleRender = () => {
+      if (animationFrame !== null) return;
+      animationFrame = requestAnimationFrame(renderFrame);
+    };
+    const unsubscribeInvalidated = renderer.onInvalidated(scheduleRender);
+    const resizeObserver = new ResizeObserver(scheduleRender);
+    resizeObserver.observe(canvas);
+    scheduleRender();
 
     let panOrigin: { x: number; y: number } | null = null;
     let isPainting = false;
@@ -189,6 +197,7 @@ export default function Index() {
       const screenY = event.clientY - rect.top;
       cursorScreenRef.current = { x: screenX, y: screenY };
       cursorNeedsInspectionRef.current = true;
+      renderer.invalidate();
       if (panOrigin) {
         const dx = event.clientX - panOrigin.x;
         const dy = event.clientY - panOrigin.y;
@@ -214,6 +223,7 @@ export default function Index() {
     const onPointerLeave = () => {
       cursorScreenRef.current = null;
       cursorNeedsInspectionRef.current = true;
+      renderer.invalidate();
     };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -232,7 +242,8 @@ export default function Index() {
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
-      cancelAnimationFrame(animationFrame);
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       canvas.removeEventListener("pointerdown", onPointerDown);
@@ -250,6 +261,7 @@ export default function Index() {
       unsubscribeCanvasContentRendered();
       unsubscribePacketLogs();
       unsubscribeConnectionState();
+      unsubscribeInvalidated();
       client.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

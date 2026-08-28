@@ -11,7 +11,12 @@ export class Camera2D {
   private viewportWidth = 1;
   private viewportHeight = 1;
 
-  constructor(x = 0, y = 0, zoom = 1) {
+  constructor(
+    x = 0,
+    y = 0,
+    zoom = 1,
+    private readonly onChange: () => void = () => {},
+  ) {
     this.x = x;
     this.y = y;
     this.zoom = zoom;
@@ -23,16 +28,21 @@ export class Camera2D {
   }
 
   pan(screenDx: number, screenDy: number): void {
+    if (screenDx === 0 && screenDy === 0) return;
     this.x -= screenDx / this.zoom;
     this.y -= screenDy / this.zoom;
+    this.onChange();
   }
 
   zoomAt(screenX: number, screenY: number, factor: number): void {
     const before = this.screenToWorld(screenX, screenY);
-    this.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * factor));
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * factor));
+    if (zoom === this.zoom) return;
+    this.zoom = zoom;
     const after = this.screenToWorld(screenX, screenY);
     this.x -= after.x - before.x;
     this.y -= after.y - before.y;
+    this.onChange();
   }
 
   screenToWorld(screenX: number, screenY: number): { x: number; y: number } {

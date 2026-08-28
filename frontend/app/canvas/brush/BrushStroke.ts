@@ -115,6 +115,7 @@ export class BrushStroke {
         this.renderer.disposeSnapshot(accumulation.previewSnapshot);
       }
       this.touchedChunks.clear();
+      this.renderer.invalidate();
     }
   }
 
@@ -181,5 +182,6 @@ export class BrushStroke {
       chunkY: accumulation.chunkY,
       bindGroup: accumulation.previewSnapshot.bindGroup,
     });
+    this.renderer.invalidate();
   }
 }

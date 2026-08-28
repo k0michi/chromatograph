@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { FrameProfiler } from "./FrameProfiler";
 
 export interface FrameProfilerPanelHandle {
@@ -25,6 +25,8 @@ export const FrameProfilerPanel = forwardRef<FrameProfilerPanelHandle>(function 
       profilerRef.current.sample(timestamp, renderTimeMs);
     },
   }), []);
+
+  useEffect(() => () => profilerRef.current?.dispose(), []);
 
   return (
     <div

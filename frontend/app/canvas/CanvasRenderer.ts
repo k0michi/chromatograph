@@ -54,6 +54,7 @@ interface HistoryRecord {
 }
 
 export type CanvasContentRenderedListener = () => void;
+export type CanvasInvalidatedListener = () => void;
 
 export class CanvasRenderer {
   private readonly context: Context;
@@ -66,11 +67,11 @@ export class CanvasRenderer {
   private readonly compositeBindGroupLayout: BindGroupLayout;
   readonly gl: WebGL2RenderingContext;
   readonly device: Device;
-  readonly camera = new Camera2D();
+  readonly camera = new Camera2D(0, 0, 1, () => this.invalidate());
   readonly tiles = new TileStore();
   readonly uncommittedOverlays = new Map<string, UncommittedOverlay>();
   readonly transparentSnapshot: TileSnapshot;
-  showGrid = false;
+  private gridVisible = false;
 
   private readonly undoStack: HistoryRecord[] = [];
   private readonly redoStack: HistoryRecord[] = [];
@@ -79,6 +80,7 @@ export class CanvasRenderer {
   private readonly replayPending = new Map<Tile, string>();
   private snapshotApplyChain: Promise<void> = Promise.resolve();
   private readonly canvasContentRenderedListeners = new Set<CanvasContentRenderedListener>();
+  private readonly canvasInvalidatedListeners = new Set<CanvasInvalidatedListener>();
   private readonly identity: Promise<Identity> = Identity.generate();
   private viewport: ChunkViewport | null = null;
   private readonly knownChunks = new Map<string, ChunkCoordinate>();
@@ -317,6 +319,7 @@ export class CanvasRenderer {
       tile.headPatchHash = update.headPatchHash;
       tile.operationEntries.length = 0;
       tile.containsEntireOperationOrder = false;
+      this.invalidate();
     }
   }
 
@@ -400,6 +403,25 @@ export class CanvasRenderer {
 
   get canRedo(): boolean {
     return this.redoStack.length > 0;
+  }
+
+  get showGrid(): boolean {
+    return this.gridVisible;
+  }
+
+  set showGrid(value: boolean) {
+    if (this.gridVisible === value) return;
+    this.gridVisible = value;
+    this.invalidate();
+  }
+
+  invalidate(): void {
+    for (const listener of this.canvasInvalidatedListeners) listener();
+  }
+
+  onInvalidated(listener: CanvasInvalidatedListener): () => void {
+    this.canvasInvalidatedListeners.add(listener);
+    return () => this.canvasInvalidatedListeners.delete(listener);
   }
 
   onCanvasContentRendered(listener: CanvasContentRenderedListener): () => void {
@@ -524,6 +546,7 @@ export class CanvasRenderer {
       this.disposeSnapshot(tile.snapshot);
     }
     tile.snapshot = rebuilt;
+    this.invalidate();
   }
 
   render(): void {
@@ -580,7 +603,7 @@ export class CanvasRenderer {
 
     for (const listener of this.canvasContentRenderedListeners) listener();
 
-    if (this.showGrid) {
+    if (this.gridVisible) {
       const gridPass = this.context.beginRenderPass();
       gridPass.setPipeline(this.gridPipeline);
       gridPass.setVertexBuffer(0, this.quad.buffer);
