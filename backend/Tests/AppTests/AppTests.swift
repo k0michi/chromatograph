@@ -38,6 +38,9 @@ struct AppTests {
         #expect(snapshots.count == 1)
         #expect(snapshots[0].chunk == TileChunk(x: 0, y: 0))
         #expect(snapshots[0].headPatchHash == patch.hash)
+        #expect(try acknowledgementHash(try await inboundIterator.next()) == patch.hash)
+        try await outbound.write(.binary(packet))
+        #expect(try acknowledgementHash(try await inboundIterator.next()) == patch.hash)
       }
       #expect(closeFrame?.closeCode == .normalClosure)
     }
@@ -82,6 +85,7 @@ struct AppTests {
         let snapshots = try snapshotData(try await iterator.next())
         #expect(snapshots.count == 1)
         #expect(snapshots[0].headPatchHash == largePatch.hash)
+        #expect(try acknowledgementHash(try await iterator.next()) == largePatch.hash)
       }
     }
   }
@@ -135,6 +139,7 @@ struct AppTests {
             #expect(
               try snapshotData(try await iterator.next())[0].headPatchHash == registrationPatch.hash
             )
+            #expect(try acknowledgementHash(try await iterator.next()) == registrationPatch.hash)
             await ready.open()
             _ = try await iterator.next()  // Patch broadcast
             #expect(
@@ -181,10 +186,12 @@ struct AppTests {
             try await outbound.write(.binary(first))
             _ = try await iterator.next()  // Patch broadcast
             #expect(try snapshotData(try await iterator.next())[0].headPatchHash == firstPatch.hash)
+            #expect(try acknowledgementHash(try await iterator.next()) == firstPatch.hash)
             try await outbound.write(.binary(second))
             _ = try await iterator.next()  // Patch broadcast
             #expect(
               try snapshotData(try await iterator.next())[0].headPatchHash == secondPatch.hash)
+            #expect(try acknowledgementHash(try await iterator.next()) == secondPatch.hash)
             await historyReady.open()
           }
         }
@@ -256,9 +263,26 @@ private func snapshotData(_ message: WebSocketMessage?) throws -> [ChunkSnapshot
   return try SnapshotPacketCodec.decode(Data(packet.dropFirst(4)))
 }
 
+private func acknowledgementHash(_ message: WebSocketMessage?) throws -> String {
+  guard case .binary(let buffer) = message else {
+    throw SnapshotTestError.expectedBinary
+  }
+  let packet = Data(buffer.readableBytesView)
+  guard packet.count >= 4 else { throw SnapshotTestError.expectedBinary }
+  let kind = packet.prefix(4).reduce(0) { ($0 << 8) | UInt32($1) }
+  guard kind == BroadcastPacketCodec.Kind.patchAcknowledgement.rawValue else {
+    throw SnapshotTestError.expectedAcknowledgement
+  }
+  guard let hash = String(data: packet.dropFirst(4), encoding: .utf8) else {
+    throw SnapshotTestError.expectedAcknowledgement
+  }
+  return hash
+}
+
 private enum SnapshotTestError: Error {
   case expectedBinary
   case expectedSnapshots
+  case expectedAcknowledgement
 }
 
 private func testPatch(

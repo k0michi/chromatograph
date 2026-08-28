@@ -7,6 +7,7 @@ import { CanvasScaleBar, type CanvasScaleBarHandle } from "~/canvas/CanvasScaleB
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
+import { NetworkDebugPanel, type NetworkDebugPanelHandle } from "~/network/NetworkDebugPanel";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import type { Route } from "./+types/_index";
 
@@ -20,6 +21,7 @@ export default function Index() {
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
   const scaleBarRef = useRef<CanvasScaleBarHandle>(null);
+  const networkDebugRef = useRef<NetworkDebugPanelHandle>(null);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
 
@@ -55,6 +57,9 @@ export default function Index() {
 
     const client = new Client(window.location.href, {
       onError: (error) => console.error("Patch WebSocket error:", error),
+    });
+    const unsubscribePacketLogs = client.subscribePacketLogs((entry) => {
+      networkDebugRef.current?.append(entry);
     });
     const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
@@ -240,6 +245,7 @@ export default function Index() {
       unsubscribePatches();
       unsubscribeSnapshots();
       unsubscribeCanvasContentRendered();
+      unsubscribePacketLogs();
       client.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -347,6 +353,7 @@ export default function Index() {
         <span style={{ opacity: 0.7 }}>B brush · E eraser · Space+drag to pan · wheel to zoom · Ctrl/Cmd+Z to undo</span>
       </div>
       <FrameProfilerPanel ref={profilerRef} />
+      <NetworkDebugPanel ref={networkDebugRef} />
       <div
         style={{
           position: "fixed",

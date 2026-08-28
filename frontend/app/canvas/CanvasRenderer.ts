@@ -271,7 +271,9 @@ export class CanvasRenderer {
 
     this.undoStack.push({ patch, entries, toggleHeadHash: patch.hash });
     this.redoStack.length = 0;
-    this.client.send(patch);
+    void this.client.send(patch).catch((error: unknown) => {
+      console.error("Failed to persist Patch for delivery:", error);
+    });
   }
 
   getChunkParents(x: number, y: number): string[] {
@@ -463,7 +465,9 @@ export class CanvasRenderer {
     }
     for (const tile of touchedTiles) this.rebuildSnapshot(tile);
     this.redoStack.push(record);
-    this.client.send(patch);
+    void this.client.send(patch).catch((error: unknown) => {
+      console.error("Failed to persist undo Patch for delivery:", error);
+    });
   }
 
   async redo(): Promise<void> {
@@ -487,7 +491,9 @@ export class CanvasRenderer {
     }
     for (const tile of touchedTiles) this.rebuildSnapshot(tile);
     this.undoStack.push(record);
-    this.client.send(patch);
+    void this.client.send(patch).catch((error: unknown) => {
+      console.error("Failed to persist redo Patch for delivery:", error);
+    });
   }
 
   private rebuildSnapshot(tile: Tile): void {

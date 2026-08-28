@@ -5,6 +5,7 @@ import { PatchDecoder, PatchEncoder } from "../app/canvas/serializePatch";
 import { OperationDecoder, OperationEncoder } from "../app/canvas/serializeOperations";
 import { BinaryWriter } from "../app/network/BinaryWriter";
 import { Client } from "../app/network/Client";
+import { MemoryPatchOutbox } from "../app/network/PatchOutbox";
 import { PACKET_VERSION } from "../app/network/PacketVersion";
 
 const operations: readonly Operation[] = [
@@ -42,10 +43,12 @@ describe("Client", () => {
   it("connects, sends a Patch, and decodes a snapshot broadcast", async () => {
     const socket = new MockWebSocket();
     const listener = vi.fn();
+    const packetLogger = vi.fn();
     const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
     });
     client.subscribeSnapshots(listener);
+    client.subscribePacketLogs(packetLogger);
     client.setViewport({ minX: 10, minY: -6, maxX: 13, maxY: -4 });
 
     const connecting = client.connect();
@@ -53,7 +56,7 @@ describe("Client", () => {
     await connecting;
     expect(socket.binaryType).toBe("arraybuffer");
 
-    client.send(patch);
+    await client.send(patch);
     expect(socket.sent[0]).toEqual(PatchEncoder.encode(patch));
 
     const imageBytes = new Uint8Array([1, 2, 3]);
@@ -63,6 +66,16 @@ describe("Client", () => {
       headPatchHash: patch.hash,
       imageBytes,
     }]);
+    expect(packetLogger).toHaveBeenCalledWith(expect.objectContaining({
+      direction: "send",
+      kind: "Patch",
+      byteLength: PatchEncoder.encode(patch).byteLength,
+    }));
+    expect(packetLogger).toHaveBeenCalledWith(expect.objectContaining({
+      direction: "receive",
+      kind: "Snapshots",
+      detail: "1 chunk(s)",
+    }));
   });
 
   it("reports invalid messages without notifying subscribers", async () => {
@@ -110,12 +123,43 @@ describe("Client", () => {
       createWebSocket: () => socket as unknown as WebSocket,
     });
     const connecting = client.connect();
-    client.send(patch);
+    const sending = client.send(patch);
     expect(socket.sent).toHaveLength(0);
 
     socket.open();
     await connecting;
+    await sending;
     expect(socket.sent).toHaveLength(1);
+  });
+
+  it("resends persisted patches after reload and removes them only after acknowledgement", async () => {
+    const outbox = new MemoryPatchOutbox();
+    const firstSocket = new MockWebSocket();
+    const firstClient = new Client("ws://example.test/ws", {
+      createWebSocket: () => firstSocket as unknown as WebSocket,
+      patchOutbox: outbox,
+    });
+    const firstConnection = firstClient.connect();
+    firstSocket.open();
+    await firstConnection;
+    await firstClient.send(patch);
+    expect(await outbox.entries()).toHaveLength(1);
+    firstClient.close();
+
+    const secondSocket = new MockWebSocket();
+    const secondClient = new Client("ws://example.test/ws", {
+      createWebSocket: () => secondSocket as unknown as WebSocket,
+      patchOutbox: outbox,
+    });
+    const secondConnection = secondClient.connect();
+    secondSocket.open();
+    await secondConnection;
+    await vi.waitFor(() => expect(secondSocket.sent).toHaveLength(1));
+    expect(secondSocket.sent[0]).toEqual(PatchEncoder.encode(patch));
+
+    secondSocket.receive(broadcastPacket(3, new TextEncoder().encode(patch.hash)).buffer);
+    await vi.waitFor(async () => expect(await outbox.entries()).toHaveLength(0));
+    secondClient.close();
   });
 
   it("fetches and decodes a chunk replay over HTTPS", async () => {

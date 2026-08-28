@@ -35,25 +35,28 @@ actor PatchBroadcaster {
     try await SnapshotPacketCodec.encode(self.chunks.latestSnapshots(for: chunks))
   }
 
-  func accept(_ patch: Patch) async throws {
-    let responsePackets: [ByteBuffer]
+  func accept(_ patch: Patch, from connectionID: ConnectionID) async throws {
+    var responsePackets: [ByteBuffer] = []
     if !committedHashes.contains(patch.hash) {
-      let snapshots = try await chunks.apply(patch)
-      committedHashes.insert(patch.hash)
-      responsePackets = [
-        ByteBuffer(
-          bytes: BroadcastPacketCodec.encode(
-            kind: .patch,
-            payload: try PatchPacketCodec.encode(patch)
-          )),
-        ByteBuffer(
-          bytes: BroadcastPacketCodec.encode(
-            kind: .snapshots,
-            payload: try SnapshotPacketCodec.encode(snapshots)
-          )),
-      ]
-    } else {
-      return
+      do {
+        let snapshots = try await chunks.apply(patch)
+        committedHashes.insert(patch.hash)
+        responsePackets = [
+          ByteBuffer(
+            bytes: BroadcastPacketCodec.encode(
+              kind: .patch,
+              payload: try PatchPacketCodec.encode(patch)
+            )),
+          ByteBuffer(
+            bytes: BroadcastPacketCodec.encode(
+              kind: .snapshots,
+              payload: try SnapshotPacketCodec.encode(snapshots)
+            )),
+        ]
+      } catch ChunkManagerError.duplicatePatch {
+        // A client may retry after the server committed the Patch but its ACK was lost.
+        committedHashes.insert(patch.hash)
+      }
     }
 
     var disconnected: [ConnectionID] = []
@@ -69,6 +72,12 @@ actor PatchBroadcaster {
     }
     for id in disconnected {
       connections[id] = nil
+    }
+
+    if let sender = connections[connectionID] {
+      try await sender.writer.writeBinaryMessage(ByteBuffer(
+        bytes: BroadcastPacketCodec.encodePatchAcknowledgement(hash: patch.hash)
+      ))
     }
   }
 }

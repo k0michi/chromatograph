@@ -3,9 +3,11 @@ import { PatchDecoder, PatchEncoder } from "~/canvas/serializePatch";
 import { ChunkReplayPacketDecoder, type ChunkReplay } from "./ChunkReplayPacket";
 import { SnapshotPacketDecoder, type ChunkSnapshotPacket } from "./SnapshotPacket";
 import { containsChunk, sameChunkViewport, type ChunkCoordinate, type ChunkViewport } from "./ChunkViewport";
+import { createPatchOutbox, type PatchOutbox } from "./PatchOutbox";
 
 type SnapshotListener = (snapshots: readonly ChunkSnapshotPacket[]) => void;
 type PatchListener = (patch: Patch) => void;
+type PacketLogListener = (entry: NetworkPacketLogEntry) => void;
 type WebSocketFactory = (url: string) => WebSocket;
 type Fetch = (input: URL, init?: RequestInit) => Promise<Response>;
 
@@ -14,6 +16,17 @@ export interface ClientOptions {
   readonly fetch?: Fetch;
   readonly onError?: (error: unknown) => void;
   readonly onClose?: (event: CloseEvent) => void;
+  readonly patchOutbox?: PatchOutbox;
+  readonly reconnectDelayMs?: number;
+}
+
+export interface NetworkPacketLogEntry {
+  readonly sequence: number;
+  readonly timestamp: number;
+  readonly direction: "send" | "receive";
+  readonly kind: "Patch" | "Snapshots" | "Acknowledgement" | "Unknown";
+  readonly byteLength: number;
+  readonly detail: string;
 }
 
 export class Client implements Disposable {
@@ -21,22 +34,32 @@ export class Client implements Disposable {
   private static readonly open = 1;
   private readonly snapshotListeners = new Set<SnapshotListener>();
   private readonly patchListeners = new Set<PatchListener>();
+  private readonly packetLogListeners = new Set<PacketLogListener>();
+  private packetLogSequence = 0;
   private socket: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
-  private readonly pendingPackets: Uint8Array<ArrayBuffer>[] = [];
+  private readonly patchOutbox: PatchOutbox;
+  private outboxWriteChain: Promise<void> = Promise.resolve();
+  private outboxFlushChain: Promise<void> = Promise.resolve();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private closedByClient = false;
+  private readonly sentPatchHashes = new Set<string>();
   private viewport: ChunkViewport | null = null;
   private readonly inflightSnapshots = new Map<string, Promise<ChunkSnapshotPacket | null>>();
 
   constructor(
     private readonly baseURL: string | URL,
     private readonly options: ClientOptions = {},
-  ) { }
+  ) {
+    this.patchOutbox = options.patchOutbox ?? createPatchOutbox();
+  }
 
   get isConnected(): boolean {
     return this.socket?.readyState === Client.open;
   }
 
   connect(): Promise<void> {
+    this.closedByClient = false;
     if (this.isConnected) return Promise.resolve();
     if (this.connectPromise) return this.connectPromise;
 
@@ -44,14 +67,15 @@ export class Client implements Disposable {
     const socket = createWebSocket(this.url("/ws", "websocket").href);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    this.sentPatchHashes.clear();
 
     this.connectPromise = new Promise<void>((resolve, reject) => {
       let didOpen = false;
       socket.onopen = () => {
         didOpen = true;
         this.connectPromise = null;
-        for (const packet of this.pendingPackets) socket.send(packet);
-        this.pendingPackets.length = 0;
+        this.clearReconnectTimer();
+        void this.flushOutbox(socket).catch((error: unknown) => this.options.onError?.(error));
         resolve();
       };
       socket.onerror = () => {
@@ -60,6 +84,7 @@ export class Client implements Disposable {
         if (!didOpen) {
           this.connectPromise = null;
           reject(error);
+          if (!this.closedByClient) this.scheduleReconnect();
         }
       };
       socket.onclose = (event) => {
@@ -68,6 +93,7 @@ export class Client implements Disposable {
           this.connectPromise = null;
         }
         this.options.onClose?.(event);
+        if (!this.closedByClient) this.scheduleReconnect();
         if (!didOpen) reject(new Error(`Patch WebSocket closed before connecting (${event.code}).`));
       };
       socket.onmessage = (event) => this.receive(event.data);
@@ -75,16 +101,18 @@ export class Client implements Disposable {
     return this.connectPromise;
   }
 
-  send(patch: Patch): void {
-    const socket = this.socket;
-    if (!socket) throw new Error("Patch WebSocket is not connected.");
+  async send(patch: Patch): Promise<void> {
     const packet = PatchEncoder.encode(patch);
-    if (socket.readyState === Client.connecting) {
-      this.pendingPackets.push(packet);
-      return;
+    const write = this.outboxWriteChain.then(() => this.patchOutbox.put({ hash: patch.hash, packet }));
+    this.outboxWriteChain = write.catch(() => {});
+    await write;
+
+    const socket = this.socket;
+    if (socket?.readyState === Client.open) {
+      await this.flushOutbox(socket);
+    } else {
+      this.scheduleReconnect(0);
     }
-    if (socket.readyState !== Client.open) throw new Error("Patch WebSocket is not connected.");
-    socket.send(packet);
   }
 
   setViewport(viewport: ChunkViewport): void {
@@ -151,11 +179,17 @@ export class Client implements Disposable {
     return () => this.patchListeners.delete(listener);
   }
 
+  subscribePacketLogs(listener: PacketLogListener): () => void {
+    this.packetLogListeners.add(listener);
+    return () => this.packetLogListeners.delete(listener);
+  }
+
   close(code = 1000, reason = "Client closed"): void {
+    this.closedByClient = true;
+    this.clearReconnectTimer();
     const socket = this.socket;
     this.socket = null;
     this.connectPromise = null;
-    this.pendingPackets.length = 0;
     if (socket && (socket.readyState === Client.open || socket.readyState === Client.connecting)) {
       socket.close(code, reason);
     }
@@ -191,13 +225,16 @@ export class Client implements Disposable {
       const payload = data.slice(4);
       if (kind === 1) {
         const patch = PatchDecoder.decode(payload);
+        this.logPacket("receive", "Patch", data.byteLength, `hash ${this.shortHash(patch.hash)}`);
         if (!this.viewport || !patch.operations.some((operation) =>
           containsChunk(this.viewport!, operation.chunk.x, operation.chunk.y))) return;
         for (const listener of this.patchListeners) listener(patch);
       } else if (kind === 2) {
         const viewport = this.viewport;
+        const decodedSnapshots = SnapshotPacketDecoder.decode(payload);
+        this.logPacket("receive", "Snapshots", data.byteLength, `${decodedSnapshots.length} chunk(s)`);
         if (!viewport) return;
-        const snapshots = SnapshotPacketDecoder.decode(payload)
+        const snapshots = decodedSnapshots
           .filter((snapshot) => containsChunk(viewport, snapshot.chunk.x, snapshot.chunk.y))
           .map((snapshot) => ({
             ...snapshot,
@@ -207,11 +244,70 @@ export class Client implements Disposable {
           }));
         if (snapshots.length === 0) return;
         for (const listener of this.snapshotListeners) listener(snapshots);
+      } else if (kind === 3) {
+        const hash = new TextDecoder().decode(payload);
+        if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("Invalid Patch acknowledgement hash.");
+        this.logPacket("receive", "Acknowledgement", data.byteLength, `hash ${this.shortHash(hash)}`);
+        void this.patchOutbox.delete(hash).catch((error: unknown) => this.options.onError?.(error));
       } else {
+        this.logPacket("receive", "Unknown", data.byteLength, `kind ${kind}`);
         throw new Error(`Unsupported broadcast packet kind ${kind}.`);
       }
     } catch (error) {
       this.options.onError?.(error);
     }
+  }
+
+  private flushOutbox(socket: WebSocket): Promise<void> {
+    const flush = this.outboxFlushChain.then(async () => {
+      const patches = await this.patchOutbox.entries();
+      for (const patch of patches) {
+        if (this.socket !== socket || socket.readyState !== Client.open) return;
+        if (this.sentPatchHashes.has(patch.hash)) continue;
+        socket.send(patch.packet);
+        this.sentPatchHashes.add(patch.hash);
+        this.logPacket("send", "Patch", patch.packet.byteLength, `hash ${this.shortHash(patch.hash)}`);
+      }
+    });
+    this.outboxFlushChain = flush.catch(() => {});
+    return flush;
+  }
+
+  private scheduleReconnect(delay = this.options.reconnectDelayMs ?? 1_000): void {
+    if (this.closedByClient || this.isConnected || this.connectPromise || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect().catch((error: unknown) => {
+        this.options.onError?.(error);
+        this.scheduleReconnect();
+      });
+    }, delay);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private logPacket(
+    direction: NetworkPacketLogEntry["direction"],
+    kind: NetworkPacketLogEntry["kind"],
+    byteLength: number,
+    detail: string,
+  ): void {
+    const entry: NetworkPacketLogEntry = {
+      sequence: ++this.packetLogSequence,
+      timestamp: Date.now(),
+      direction,
+      kind,
+      byteLength,
+      detail,
+    };
+    for (const listener of this.packetLogListeners) listener(entry);
+  }
+
+  private shortHash(hash: string): string {
+    return `${hash.slice(0, 12)}…`;
   }
 }

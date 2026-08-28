@@ -129,7 +129,7 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
             let patch = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
             try PatchValidator.validate(patch)
             try validatePatchImages(patch)
-            try await broadcaster.accept(patch)
+            try await broadcaster.accept(patch, from: connectionID)
           } catch {
             try await outbound.write(.text("Invalid patch packet"))
           }
