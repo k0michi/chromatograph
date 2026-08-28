@@ -17,6 +17,10 @@ describe("Camera2D", () => {
 
     expect(screenX).toBeCloseTo(123, 4);
     expect(screenY).toBeCloseTo(456, 4);
+    expect(camera.worldToScreen(world.x, world.y)).toEqual({
+      x: expect.closeTo(123, 4),
+      y: expect.closeTo(456, 4),
+    });
   });
 
   it("keeps the anchor point fixed while rotating", () => {
@@ -44,6 +48,8 @@ describe("Camera2D", () => {
     const clipY = m[1] * world.x + m[4] * world.y + m[7];
     expect((clipX + 1) * 0.5 * 900).toBeCloseTo(640, 4);
     expect((1 - clipY) * 0.5 * 500).toBeCloseTo(210, 4);
+    expect(camera.worldToScreen(world.x, world.y).x).toBeCloseTo(640, 4);
+    expect(camera.worldToScreen(world.x, world.y).y).toBeCloseTo(210, 4);
   });
 
   it("mirrors the x axis when flipX is toggled", () => {

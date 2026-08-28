@@ -107,6 +107,19 @@ export class Camera2D {
     };
   }
 
+  worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
+    const dx = worldX - this.x;
+    const dy = worldY - this.y;
+    const cos = Math.cos(this.rotation);
+    const sin = Math.sin(this.rotation);
+    return {
+      x: this.viewportWidth / 2 +
+        (this.flipX ? -1 : 1) * this.zoom * (cos * dx - sin * dy),
+      y: this.viewportHeight / 2 +
+        (this.flipY ? -1 : 1) * this.zoom * (sin * dx + cos * dy),
+    };
+  }
+
   /** The four world-space corners of the viewport, clockwise from top-left. */
   visibleWorldCorners(): { x: number; y: number }[] {
     return [

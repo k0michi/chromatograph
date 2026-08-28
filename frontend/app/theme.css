@@ -18,6 +18,8 @@
   --graph-bg: rgba(0, 0, 0, 0.45);
   --graph-grid: rgba(255, 255, 255, 0.16);
   --graph-label: rgba(255, 255, 255, 0.65);
+  --ruler-bg: #202024;
+  --ruler-fg: rgba(255, 255, 255, 0.72);
 }
 
 @media (prefers-color-scheme: light) {
@@ -39,5 +41,7 @@
     --graph-bg: rgba(0, 0, 0, 0.05);
     --graph-grid: rgba(0, 0, 0, 0.16);
     --graph-label: rgba(0, 0, 0, 0.6);
+    --ruler-bg: #e2e2e6;
+    --ruler-fg: rgba(0, 0, 0, 0.68);
   }
 }

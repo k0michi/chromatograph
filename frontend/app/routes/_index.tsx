@@ -4,7 +4,7 @@ import { Brush } from "~/canvas/brush/Brush";
 import { BrushStroke } from "~/canvas/brush/BrushStroke";
 import { RoundBrushTip } from "~/canvas/brush/RoundBrushTip";
 import { CanvasRenderer } from "~/canvas/CanvasRenderer";
-import { CanvasScaleBar, type CanvasScaleBarHandle } from "~/canvas/CanvasScaleBar";
+import { CanvasRulers, type CanvasRulersHandle } from "~/canvas/CanvasRulers";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
@@ -169,7 +169,7 @@ export default function Index() {
   const brushRef = useRef<Brush | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
-  const scaleBarRef = useRef<CanvasScaleBarHandle>(null);
+  const rulersRef = useRef<CanvasRulersHandle>(null);
   const networkDebugRef = useRef<NetworkDebugPanelHandle>(null);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
@@ -180,6 +180,7 @@ export default function Index() {
   const [hardness, setHardness] = useState(0.8);
   const [opacity, setOpacity] = useState(1);
   const [showGrid, setShowGrid] = useState(false);
+  const [showRulers, setShowRulers] = useState(true);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
 
   const isEraser = tool === "eraser";
@@ -214,6 +215,11 @@ export default function Index() {
           label: "Show Grid",
           checked: showGrid,
           onSelect: () => setShowGrid((value) => !value),
+        },
+        {
+          label: "Show Rulers",
+          checked: showRulers,
+          onSelect: () => setShowRulers((value) => !value),
         },
         { separator: true, label: "" },
         {
@@ -263,6 +269,10 @@ export default function Index() {
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
   }, [showGrid]);
+
+  useEffect(() => {
+    if (showRulers) rendererRef.current?.invalidate();
+  }, [showRulers]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -347,7 +357,7 @@ export default function Index() {
       animationFrame = null;
       const renderStart = performance.now();
       renderer.render();
-      scaleBarRef.current?.update(renderer.camera.zoom);
+      rulersRef.current?.update(renderer.camera, cursorScreenRef.current);
       profilerRef.current?.sample(timestamp, performance.now() - renderStart);
     };
     const scheduleRender = () => {
@@ -671,6 +681,7 @@ export default function Index() {
           />
         </label>
       </div>
+      {showRulers ? <CanvasRulers ref={rulersRef} top={CHROME_TOP} left={52} right={300} /> : null}
       {/* Right sidebar (docked panels; will become movable windows later) */}
       <aside style={sidebarStyle}>
         <PanelWindow title="Inspector">
@@ -684,18 +695,6 @@ export default function Index() {
         </PanelWindow>
       </aside>
 
-      {/* Scale bar HUD over the canvas */}
-      <div
-        style={{
-          position: "fixed",
-          left: 64,
-          bottom: 12,
-          display: "flex",
-          pointerEvents: "none",
-        }}
-      >
-        <CanvasScaleBar ref={scaleBarRef} />
-      </div>
     </>
   );
 }
