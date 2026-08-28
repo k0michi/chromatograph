@@ -28,6 +28,7 @@ import type { ChunkSnapshotPacket } from "~/network/SnapshotPacket";
 import type { Client } from "~/network/Client";
 import {
   chunksInViewport,
+  chunkViewportKey,
   containsChunk,
   sameChunkViewport,
   type ChunkCoordinate,
@@ -572,7 +573,8 @@ export class CanvasRenderer {
     const pass = this.beginPass(undefined, BACKGROUND_COLOR);
 
     const viewProjection = this.camera.getViewProjectionMatrix();
-    const bounds = this.camera.visibleWorldBounds();
+    const isChunkVisible = (chunkX: number, chunkY: number) =>
+      !this.viewport || containsChunk(this.viewport, chunkX, chunkY);
     const previewedTiles = new Set(this.uncommittedOverlays.keys());
 
     for (const tile of this.tiles) {
@@ -582,16 +584,11 @@ export class CanvasRenderer {
       if (previewedTiles.has(this.chunkKey(tile.x, tile.y))) {
         continue;
       }
-      const tileMinX = tile.x * TILE_SIZE;
-      const tileMinY = tile.y * TILE_SIZE;
-      const isVisible =
-        tileMinX < bounds.maxX &&
-        tileMinX + TILE_SIZE > bounds.minX &&
-        tileMinY < bounds.maxY &&
-        tileMinY + TILE_SIZE > bounds.minY;
-      if (!isVisible) {
+      if (!isChunkVisible(tile.x, tile.y)) {
         continue;
       }
+      const tileMinX = tile.x * TILE_SIZE;
+      const tileMinY = tile.y * TILE_SIZE;
 
       const model = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, tileMinX, tileMinY, 1);
       const mvp = mat3.multiply(mat3.create(), viewProjection, model);
@@ -599,16 +596,11 @@ export class CanvasRenderer {
     }
 
     for (const overlay of this.uncommittedOverlays.values()) {
-      const tileMinX = overlay.chunkX * TILE_SIZE;
-      const tileMinY = overlay.chunkY * TILE_SIZE;
-      const isVisible =
-        tileMinX < bounds.maxX &&
-        tileMinX + TILE_SIZE > bounds.minX &&
-        tileMinY < bounds.maxY &&
-        tileMinY + TILE_SIZE > bounds.minY;
-      if (!isVisible) {
+      if (!isChunkVisible(overlay.chunkX, overlay.chunkY)) {
         continue;
       }
+      const tileMinX = overlay.chunkX * TILE_SIZE;
+      const tileMinY = overlay.chunkY * TILE_SIZE;
 
       const model = mat3.fromValues(TILE_SIZE, 0, 0, 0, TILE_SIZE, 0, tileMinX, tileMinY, 1);
       const mvp = mat3.multiply(mat3.create(), viewProjection, model);
@@ -627,6 +619,7 @@ export class CanvasRenderer {
       gridPass.setUniformFloat2("uViewportSize", this.context.canvas.width, this.context.canvas.height);
       gridPass.setUniformFloat2("uCameraPosition", this.camera.x, this.camera.y);
       gridPass.setUniformFloat("uZoom", this.camera.zoom * (window.devicePixelRatio || 1));
+      gridPass.setUniformFloat("uRotation", this.camera.rotation);
       gridPass.setUniformFloat("uGridSize", TILE_SIZE);
       gridPass.draw(this.quad.vertexCount);
       gridPass.end();
@@ -641,12 +634,32 @@ export class CanvasRenderer {
 
   private updateViewport(): void {
     const bounds = this.camera.visibleWorldBounds();
-    const viewport: ChunkViewport = {
-      minX: Math.floor(bounds.minX / TILE_SIZE),
-      minY: Math.floor(bounds.minY / TILE_SIZE),
-      maxX: Math.ceil(bounds.maxX / TILE_SIZE) - 1,
-      maxY: Math.ceil(bounds.maxY / TILE_SIZE) - 1,
-    };
+    const minX = Math.floor(bounds.minX / TILE_SIZE);
+    const minY = Math.floor(bounds.minY / TILE_SIZE);
+    const maxX = Math.ceil(bounds.maxX / TILE_SIZE) - 1;
+    const maxY = Math.ceil(bounds.maxY / TILE_SIZE) - 1;
+
+    // Only the chunks the (possibly rotated) viewport quad actually overlaps,
+    // so a rotated camera never queries the empty corners of its bounding box.
+    const corners = this.camera.visibleWorldCorners();
+    const keys = new Set<string>();
+    for (let chunkY = minY; chunkY <= maxY; chunkY++) {
+      for (let chunkX = minX; chunkX <= maxX; chunkX++) {
+        if (
+          quadIntersectsRect(
+            corners,
+            chunkX * TILE_SIZE,
+            chunkY * TILE_SIZE,
+            (chunkX + 1) * TILE_SIZE,
+            (chunkY + 1) * TILE_SIZE,
+          )
+        ) {
+          keys.add(chunkViewportKey(chunkX, chunkY));
+        }
+      }
+    }
+
+    const viewport: ChunkViewport = { minX, minY, maxX, maxY, keys };
     if (sameChunkViewport(this.viewport, viewport)) return;
     this.viewport = viewport;
     this.client.setViewport(viewport);
@@ -719,4 +732,44 @@ export class CanvasRenderer {
       this.disposeTileSnapshots(tile);
     }
   }
+}
+
+/** Separating-axis test between a convex quad and an axis-aligned rectangle. */
+function quadIntersectsRect(
+  quad: readonly { x: number; y: number }[],
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): boolean {
+  const rect: [number, number][] = [
+    [minX, minY],
+    [maxX, minY],
+    [maxX, maxY],
+    [minX, maxY],
+  ];
+  const axes: [number, number][] = [[1, 0], [0, 1]];
+  for (let i = 0; i < quad.length; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) % quad.length];
+    axes.push([-(b.y - a.y), b.x - a.x]);
+  }
+  for (const [ax, ay] of axes) {
+    let quadMin = Infinity;
+    let quadMax = -Infinity;
+    for (const point of quad) {
+      const projection = point.x * ax + point.y * ay;
+      quadMin = Math.min(quadMin, projection);
+      quadMax = Math.max(quadMax, projection);
+    }
+    let rectMin = Infinity;
+    let rectMax = -Infinity;
+    for (const [x, y] of rect) {
+      const projection = x * ax + y * ay;
+      rectMin = Math.min(rectMin, projection);
+      rectMax = Math.max(rectMax, projection);
+    }
+    if (quadMax < rectMin || rectMax < quadMin) return false;
+  }
+  return true;
 }
