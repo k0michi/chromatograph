@@ -386,6 +386,7 @@ export default function Index() {
           anchorY: number;
           startX: number;
           lastX: number;
+          startRotation: number;
           alt: boolean;
           dragging: boolean;
         }
@@ -460,6 +461,7 @@ export default function Index() {
           anchorY: activeTool === "rotate" ? rect.height / 2 : event.clientY - rect.top,
           startX: event.clientX,
           lastX: event.clientX,
+          startRotation: renderer.camera.rotation,
           alt: event.altKey,
           dragging: false,
         };
@@ -496,7 +498,17 @@ export default function Index() {
           if (scrubDrag.kind === "zoom") {
             renderer.camera.zoomAt(scrubDrag.anchorX, scrubDrag.anchorY, Math.exp(dx * 0.01));
           } else {
-            renderer.camera.rotateAt(scrubDrag.anchorX, scrubDrag.anchorY, dx * 0.01);
+            const freeRotation = scrubDrag.startRotation +
+              (event.clientX - scrubDrag.startX) * 0.01;
+            const snapStep = Math.PI / 4;
+            const targetRotation = event.shiftKey
+              ? Math.round(freeRotation / snapStep) * snapStep
+              : freeRotation;
+            renderer.camera.rotateAt(
+              scrubDrag.anchorX,
+              scrubDrag.anchorY,
+              targetRotation - renderer.camera.rotation,
+            );
           }
         }
         return;
