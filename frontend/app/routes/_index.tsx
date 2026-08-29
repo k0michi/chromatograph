@@ -22,6 +22,8 @@ import { ShortcutManager } from "~/ui/ShortcutManager";
 import { ColorControl } from "~/ui/ColorControl";
 import { ColorStore } from "~/color/ColorStore";
 import { SwatchesPanel } from "~/color/SwatchesPanel";
+import { createDefaultToolSettings, isPaintTool, TOOL_DEFINITIONS, TOOL_ORDER,
+  toolForKey, updatePaintToolSettings, type PaintToolSettings, type ToolId } from "~/tools/ToolRegistry";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -31,31 +33,6 @@ const CHROME_TOP = MENU_BAR_HEIGHT + OPTIONS_BAR_HEIGHT;
 export function meta(_args: Route.MetaArgs) {
   return [{ title: "Chromatograph" }];
 }
-
-type Tool = "brush" | "eraser" | "move" | "zoom" | "rotate";
-
-const TOOL_LABELS: Record<Tool, string> = {
-  brush: "Brush",
-  eraser: "Eraser",
-  move: "Move",
-  zoom: "Zoom",
-  rotate: "Rotate",
-};
-
-function cursorForTool(tool: Tool): string {
-  if (tool === "move") return "grab";
-  if (tool === "zoom") return "zoom-in";
-  if (tool === "rotate") return "grab";
-  return "crosshair";
-}
-
-const TOOL_RAIL: readonly { id: Tool; glyph: string; shortcut: string }[] = [
-  { id: "brush", glyph: "B", shortcut: "B" },
-  { id: "eraser", glyph: "E", shortcut: "E" },
-  { id: "move", glyph: "M", shortcut: "H" },
-  { id: "zoom", glyph: "Z", shortcut: "Z" },
-  { id: "rotate", glyph: "R", shortcut: "R" },
-];
 
 const menuBarStyle: React.CSSProperties = {
   position: "fixed",
@@ -193,23 +170,21 @@ export default function Index() {
   const [backgroundColor, setBackgroundColor] = useState("#ffffff");
   const foregroundColorRef = useRef(foregroundColor);
   foregroundColorRef.current = foregroundColor;
-  const [tool, setTool] = useState<Tool>("brush");
-  const [size, setSize] = useState(40);
-  const [hardness, setHardness] = useState(0.8);
-  const [opacity, setOpacity] = useState(1);
-  const [spacing, setSpacing] = useState(0.1);
-  const [smoothing, setSmoothing] = useState(0.5);
-  const [penPressureSize, setPenPressureSize] = useState(true);
-  const [penPressureOpacity, setPenPressureOpacity] = useState(false);
+  const [tool, setTool] = useState<ToolId>("brush");
+  const [toolSettings, setToolSettings] = useState(createDefaultToolSettings);
   const [showGrid, setShowGrid] = useState(false);
   const [showRulers, setShowRulers] = useState(true);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
   const [operationHistory, setOperationHistory] = useState<readonly OperationHistoryItem[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const isEraser = tool === "eraser";
-  const isPaintTool = tool === "brush" || tool === "eraser";
-  const compositeOp = isEraser ? CompositeOp.DestinationOut : CompositeOp.SourceOver;
+  const activeDefinition = TOOL_DEFINITIONS[tool];
+  const activePaintSettings = isPaintTool(tool) ? toolSettings[tool] : null;
+  const compositeOp = activeDefinition.compositeOp ?? CompositeOp.SourceOver;
+  const updateActivePaintSettings = (patch: Partial<Omit<PaintToolSettings, "kind">>) => {
+    if (!isPaintTool(tool)) return;
+    setToolSettings((current) => updatePaintToolSettings(current, tool, patch));
+  };
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const isSpaceHeldRef = useRef(false);
@@ -296,19 +271,17 @@ export default function Index() {
 
   useEffect(() => {
     const brush = brushRef.current;
-    if (!brush) {
-      return;
-    }
+    if (!brush || !activePaintSettings) return;
     brush.settings.color = foregroundColor;
-    brush.settings.size = size;
-    brush.settings.hardness = hardness;
-    brush.settings.opacity = opacity;
-    brush.settings.spacing = spacing;
-    brush.settings.smoothing = smoothing;
+    brush.settings.size = activePaintSettings.size;
+    brush.settings.hardness = activePaintSettings.hardness;
+    brush.settings.opacity = activePaintSettings.opacity;
+    brush.settings.spacing = activePaintSettings.spacing;
+    brush.settings.smoothing = activePaintSettings.smoothing;
     brush.settings.compositeOp = compositeOp;
-    brush.settings.pressureSize = penPressureSize ? 1 : 0;
-    brush.settings.pressureOpacity = penPressureOpacity ? 1 : 0;
-  }, [foregroundColor, size, hardness, opacity, spacing, smoothing, compositeOp, penPressureSize, penPressureOpacity]);
+    brush.settings.pressureSize = activePaintSettings.penPressureSize ? 1 : 0;
+    brush.settings.pressureOpacity = activePaintSettings.penPressureOpacity ? 1 : 0;
+  }, [foregroundColor, activePaintSettings, compositeOp]);
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
@@ -322,7 +295,7 @@ export default function Index() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     if (isSpaceHeldRef.current) return;
-    canvas.style.cursor = cursorForTool(tool);
+    canvas.style.cursor = TOOL_DEFINITIONS[tool].cursor;
   }, [tool]);
 
   useEffect(() => {
@@ -387,17 +360,18 @@ export default function Index() {
       }
     });
 
+    const initialPaintSettings = toolSettings.brush;
     const brush = new Brush({
       tip: new RoundBrushTip(),
-      compositeOp,
-      size,
-      hardness,
+      compositeOp: TOOL_DEFINITIONS.brush.compositeOp ?? CompositeOp.SourceOver,
+      size: initialPaintSettings.size,
+      hardness: initialPaintSettings.hardness,
       color: foregroundColor,
-      opacity,
-      spacing,
-      smoothing,
-      pressureSize: penPressureSize ? 1 : 0,
-      pressureOpacity: penPressureOpacity ? 1 : 0,
+      opacity: initialPaintSettings.opacity,
+      spacing: initialPaintSettings.spacing,
+      smoothing: initialPaintSettings.smoothing,
+      pressureSize: initialPaintSettings.penPressureSize ? 1 : 0,
+      pressureOpacity: initialPaintSettings.penPressureOpacity ? 1 : 0,
     });
     brushRef.current = brush;
     let stroke: BrushStroke | null = null;
@@ -437,7 +411,7 @@ export default function Index() {
     let isPainting = false;
 
     const restoreCursor = () => {
-      canvas.style.cursor = isSpaceHeldRef.current ? "grab" : cursorForTool(toolRef.current);
+      canvas.style.cursor = isSpaceHeldRef.current ? "grab" : TOOL_DEFINITIONS[toolRef.current].cursor;
     };
 
     const screenPointFromEvent = (event: PointerEvent): ScreenStrokePoint => {
@@ -468,11 +442,8 @@ export default function Index() {
           swapColorsRef.current();
           return;
         }
-        if (key === "b") return setTool("brush");
-        if (key === "e") return setTool("eraser");
-        if (key === "h" || key === "v") return setTool("move");
-        if (key === "z") return setTool("zoom");
-        if (key === "r") return setTool("rotate");
+        const shortcutTool = toolForKey(key);
+        if (shortcutTool) return setTool(shortcutTool);
       }
       if (shortcutsRef.current.matches(event, "undo")) {
         event.preventDefault();
@@ -686,9 +657,9 @@ export default function Index() {
       </div>
       {/* Top options bar (contextual to the active tool) */}
       <div style={topBarStyle}>
-        <span style={{ fontWeight: 700, minWidth: 52 }}>{TOOL_LABELS[tool]}</span>
+        <span style={{ fontWeight: 700, minWidth: 52 }}>{activeDefinition.label}</span>
         <div style={topBarDividerStyle} />
-        {isPaintTool ? (
+        {activePaintSettings ? (
           <>
             <label style={fieldStyle}>
               <span style={fieldLabelStyle}>Size</span>
@@ -697,10 +668,10 @@ export default function Index() {
                 style={rangeStyle}
                 min={2}
                 max={200}
-                value={size}
-                onChange={(event) => setSize(Number(event.target.value))}
+                value={activePaintSettings.size}
+                onChange={(event) => updateActivePaintSettings({ size: Number(event.target.value) })}
               />
-              <span style={fieldValueStyle}>{size}</span>
+              <span style={fieldValueStyle}>{activePaintSettings.size}</span>
             </label>
             <label style={fieldStyle}>
               <span style={fieldLabelStyle}>Hardness</span>
@@ -710,10 +681,10 @@ export default function Index() {
                 min={0}
                 max={1}
                 step={0.01}
-                value={hardness}
-                onChange={(event) => setHardness(Number(event.target.value))}
+                value={activePaintSettings.hardness}
+                onChange={(event) => updateActivePaintSettings({ hardness: Number(event.target.value) })}
               />
-              <span style={fieldValueStyle}>{hardness.toFixed(2)}</span>
+              <span style={fieldValueStyle}>{activePaintSettings.hardness.toFixed(2)}</span>
             </label>
             <label style={fieldStyle}>
               <span style={fieldLabelStyle}>Opacity</span>
@@ -723,10 +694,10 @@ export default function Index() {
                 min={0}
                 max={1}
                 step={0.01}
-                value={opacity}
-                onChange={(event) => setOpacity(Number(event.target.value))}
+                value={activePaintSettings.opacity}
+                onChange={(event) => updateActivePaintSettings({ opacity: Number(event.target.value) })}
               />
-              <span style={fieldValueStyle}>{opacity.toFixed(2)}</span>
+              <span style={fieldValueStyle}>{activePaintSettings.opacity.toFixed(2)}</span>
             </label>
             <label style={fieldStyle}>
               <span style={fieldLabelStyle}>Spacing</span>
@@ -736,10 +707,10 @@ export default function Index() {
                 min={0.01}
                 max={1}
                 step={0.01}
-                value={spacing}
-                onChange={(event) => setSpacing(Number(event.target.value))}
+                value={activePaintSettings.spacing}
+                onChange={(event) => updateActivePaintSettings({ spacing: Number(event.target.value) })}
               />
-              <span style={fieldValueStyle}>{`${Math.round(spacing * 100)}%`}</span>
+              <span style={fieldValueStyle}>{`${Math.round(activePaintSettings.spacing * 100)}%`}</span>
             </label>
             <label style={fieldStyle}>
               <span style={fieldLabelStyle}>Smoothing</span>
@@ -749,33 +720,33 @@ export default function Index() {
                 min={0}
                 max={1}
                 step={0.01}
-                value={smoothing}
-                onChange={(event) => setSmoothing(Number(event.target.value))}
+                value={activePaintSettings.smoothing}
+                onChange={(event) => updateActivePaintSettings({ smoothing: Number(event.target.value) })}
               />
-              <span style={fieldValueStyle}>{smoothing.toFixed(2)}</span>
+              <span style={fieldValueStyle}>{activePaintSettings.smoothing.toFixed(2)}</span>
             </label>
             <div style={topBarDividerStyle} />
             <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Pen</span>
             <label style={{ ...fieldStyle, gap: 6 }}>
               <input
                 type="checkbox"
-                checked={penPressureSize}
-                onChange={(event) => setPenPressureSize(event.target.checked)}
+                checked={activePaintSettings.penPressureSize}
+                onChange={(event) => updateActivePaintSettings({ penPressureSize: event.target.checked })}
               />
               <span style={fieldLabelStyle}>Size</span>
             </label>
             <label style={{ ...fieldStyle, gap: 6 }}>
               <input
                 type="checkbox"
-                checked={penPressureOpacity}
-                onChange={(event) => setPenPressureOpacity(event.target.checked)}
+                checked={activePaintSettings.penPressureOpacity}
+                onChange={(event) => updateActivePaintSettings({ penPressureOpacity: event.target.checked })}
               />
               <span style={fieldLabelStyle}>Opacity</span>
             </label>
           </>
-        ) : tool === "move" ? (
+        ) : activeDefinition.options === "move" ? (
           <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Drag to pan</span>
-        ) : tool === "zoom" ? (
+        ) : activeDefinition.options === "zoom" ? (
           <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
             Click to zoom in · Alt+click to zoom out · drag horizontally
           </span>
@@ -797,18 +768,21 @@ export default function Index() {
 
       {/* Left tool rail */}
       <div style={toolRailStyle}>
-        {TOOL_RAIL.map(({ id, glyph, shortcut }) => (
+        {TOOL_ORDER.map((id) => {
+          const definition = TOOL_DEFINITIONS[id];
+          return (
           <button
             key={id}
             type="button"
-            title={`${TOOL_LABELS[id]} (${shortcut})`}
+            title={`${definition.label} (${definition.shortcut})`}
             aria-pressed={tool === id}
             style={toolButtonStyle(tool === id)}
             onClick={() => setTool(id)}
           >
-            {glyph}
+            {definition.glyph}
           </button>
-        ))}
+          );
+        })}
         <div style={toolRailDividerStyle} />
         <ColorControl
           foreground={foregroundColor}
