@@ -50,6 +50,7 @@ export function KeySettings({ open, onClose }: { readonly open: boolean; readonl
           <div style={{ display: "grid", gap: 9 }}>
             {keyring.keys.map((key) => {
               const active = key.id === keyring.activeKeyId;
+              const isLastKey = keyring.keys.length === 1;
               return <div key={key.id} style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto",
                 gap: 13, alignItems: "center", padding: 13, borderRadius: 8,
                 border: `1px solid ${active ? "var(--accent)" : "var(--panel-border-strong)"}`,
@@ -70,7 +71,11 @@ export function KeySettings({ open, onClose }: { readonly open: boolean; readonl
                     anchor.href = url; anchor.download = `${key.name.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase() || "key"}.chromatograph-key.json`;
                     anchor.click(); URL.revokeObjectURL(url);
                   })}>Export…</button>
-                  <button disabled={busy} type="button" style={{ ...buttonStyle, color: "#ef8d8d" }}
+                  <button disabled={busy || isLastKey} type="button"
+                    title={isLastKey ? "The last signing key cannot be deleted." : undefined}
+                    style={{ ...buttonStyle, color: "#ef8d8d",
+                      cursor: busy || isLastKey ? "default" : "pointer",
+                      opacity: busy || isLastKey ? 0.45 : 1 }}
                     onClick={() => {
                       if (!window.confirm(`Delete “${key.name}”? This cannot be undone.`)) return;
                       void run(async () => { await keyring.deleteKey(key.id); });

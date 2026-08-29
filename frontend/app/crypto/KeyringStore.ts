@@ -77,6 +77,7 @@ export class KeyringStore extends Store {
     await this.initialize();
     const record = this.records.find((key) => key.id === id);
     if (!record) throw new Error("Signing key not found.");
+    if (this.records.length <= 1) throw new Error("The last signing key cannot be deleted.");
 
     const remaining = this.records.filter((key) => key.id !== id);
     const nextActiveId = this.activeId === id ? remaining[0]?.id ?? null : this.activeId;
