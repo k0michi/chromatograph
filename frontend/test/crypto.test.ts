@@ -5,8 +5,10 @@ import { Sha256 } from "../app/crypto/sha256";
 
 describe("crypto primitives", () => {
   it("calculates the SHA-256 known vector for abc", async () => {
-    const digest = await Sha256.digest(new TextEncoder().encode("abc"));
+    const input = new TextEncoder().encode("abc");
+    const digest = await Sha256.digest(input);
     expect(Hex.fromBytes(digest)).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    expect(Hex.fromBytes(Sha256.digestSync(input))).toBe(Hex.fromBytes(digest));
   });
 
   it("rejects malformed hexadecimal", () => {

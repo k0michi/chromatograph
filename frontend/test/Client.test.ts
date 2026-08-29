@@ -7,43 +7,50 @@ import { BinaryWriter } from "../app/network/BinaryWriter";
 import { Client } from "../app/network/Client";
 import { MemoryPatchOutbox } from "../app/network/PatchOutbox";
 import { PACKET_VERSION } from "../app/network/PacketVersion";
+import { Sha256 } from "../app/crypto/sha256";
+import { Hex } from "../app/crypto/hex";
+import { PATCH_FORMAT_VERSION } from "../app/canvas/Patch";
+import { PatchPayloadEncoder, decodeCbor, encodeCbor } from "../app/canvas/serializeOperations";
 
+const image = new Uint8Array([0, 1, 2, 255]);
+const payloadHash = Hex.fromBytes(Sha256.digestSync(image));
 const operations: readonly Operation[] = [
   {
     type: "blend",
     chunk: { x: 12, y: -5 },
-    parents: ["ab".repeat(32)],
+    parent: "ab".repeat(32),
     compositeOp: CompositeOp.DestinationOut,
     blendMode: BlendMode.Multiply,
-    opacity: 0.5,
-    imageBytes: new Uint8Array([0, 1, 2, 255]),
+    opacity: 128,
+    payloadHash,
   },
-  { type: "undo", chunk: { x: -1, y: 2 }, parents: [] },
+  { type: "undo", targetPatchHash: "ef".repeat(32) },
 ];
+const fixturePayload = PatchPayloadEncoder.encode({ version: PATCH_FORMAT_VERSION, publicKeyHex: "11".repeat(32), timestamp: 123, operations });
 const patch = Patch.fromEncoded(
   operations,
   "11".repeat(32),
-  "22".repeat(32),
+  123,
   "33".repeat(64),
+  [image],
+  Hex.fromBytes(Sha256.digestSync(fixturePayload)),
 );
 
 describe("OperationDecoder", () => {
   it("decodes packets emitted by OperationEncoder", () => {
-    expect(OperationDecoder.operations(OperationEncoder.operations(operations))).toEqual(operations);
+    expect(OperationDecoder.values(decodeCbor(encodeCbor(OperationEncoder.values(operations))) as unknown[])).toEqual(operations);
   });
 
   it("matches the Swift CBOR fixture", () => {
-    expect(toHex(OperationEncoder.operations(operations))).toBe(
-      "82008288010c24815820" + "ab".repeat(32) +
-      "01011a3f00000044000102ff" +
-      "8402200280",
+    expect(toHex(encodeCbor(OperationEncoder.values(operations)))).toBe(
+      "8288005820" + "ab".repeat(32) + "0c24010118805820" + payloadHash + "82015820" + "ef".repeat(32),
     );
   });
 
   it("rejects truncated and trailing packets", () => {
-    const packet = OperationEncoder.operations([]);
-    expect(() => OperationDecoder.operations(packet.slice(0, -1))).toThrow("CBOR decode error");
-    expect(() => OperationDecoder.operations(new Uint8Array([...packet, 0]))).toThrow("CBOR decode error");
+    const packet = encodeCbor(OperationEncoder.values([]));
+    expect(() => decodeCbor(packet.slice(0, -1))).toThrow("CBOR decode error");
+    expect(() => decodeCbor(new Uint8Array([...packet, 0]))).toThrow("CBOR decode error");
   });
 });
 

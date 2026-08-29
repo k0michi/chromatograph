@@ -21,16 +21,15 @@ enum BlendMode: UInt32, Equatable, Sendable {
 
 struct BlendOperation: Equatable, Sendable {
     let chunk: TileChunk
-    let parents: [String]
+    let parent: String
     let compositeOp: CompositeOp
     let blendMode: BlendMode
-    let opacity: Float
-    let imageBytes: Data
+    let opacity: UInt8
+    let payloadHash: String
 }
 
 struct UndoOperation: Equatable, Sendable {
-    let chunk: TileChunk
-    let parents: [String]
+    let targetPatchHash: String
 }
 
 enum Operation: Equatable, Sendable {
@@ -41,6 +40,10 @@ enum Operation: Equatable, Sendable {
 struct Patch: Equatable, Sendable {
     let operations: [Operation]
     let publicKeyHex: String
+    let timestamp: UInt64
     let hash: String
     let signatureHex: String
+    let images: [Data]
 }
+
+let rootPatchHash = String(repeating: "00", count: 32)

@@ -17,7 +17,7 @@ import {
   TILE_GRID_FRAGMENT_SHADER,
 } from "./CanvasShaders";
 import { CHUNK_VIEW_PROJECTION, worldToChunkPosition } from "./chunkSpace";
-import { CompositeOp, type BlendOperation, type UndoOperation } from "./Operation";
+import { CompositeOp, ROOT_PATCH_HASH, type PendingBlendOperation, type RenderableBlendOperation, type RenderableOperation, type UndoOperation } from "./Operation";
 import { Patch } from "./Patch";
 import { QuadGeometry } from "./QuadGeometry";
 import { TileStore } from "./TileStore";
@@ -244,7 +244,7 @@ export class CanvasRenderer {
   private paintOperationOntoSnapshot(
     destination: TileSnapshot,
     output: TileSnapshot,
-    operation: BlendOperation,
+    operation: RenderableBlendOperation,
   ): void {
     const decoded = PngCodec.decodeRGBA(operation.imageBytes, TILE_SIZE, TILE_SIZE);
     using texture = this.device.createTexture({
@@ -252,7 +252,7 @@ export class CanvasRenderer {
       minFilter: "nearest",
       magFilter: "nearest",
     });
-    this.compositeOntoSnapshot(destination, output, texture, SNAPSHOT_MVP, operation.opacity, false, operation.compositeOp);
+    this.compositeOntoSnapshot(destination, output, texture, SNAPSHOT_MVP, operation.opacity / 255, false, operation.compositeOp);
   }
 
   createEmptySnapshot(): TileSnapshot {
@@ -271,17 +271,18 @@ export class CanvasRenderer {
     snapshot.framebuffer.dispose();
   }
 
-  async commitPatch(operations: readonly BlendOperation[]): Promise<void> {
+  async commitPatch(operations: readonly PendingBlendOperation[]): Promise<void> {
     const patch = await Patch.create(operations, await this.identity);
     this.optimisticPatchHashes.add(patch.hash);
     const entries: HistoryRecord["entries"] = [];
     const touchedTiles = new Set<Tile>();
 
-    for (const operation of operations) {
+    for (const operation of patch.operations) {
+      if (operation.type !== "blend") continue;
       const tile = this.tiles.getOrCreate(operation.chunk.x, operation.chunk.y);
-      const entry = tile.addOperation(patch.hash, operation);
+      const entry = tile.addOperation(patch.hash, { ...operation, imageBytes: patch.imageFor(operation) });
       entries.push({ tile, entry });
-      tile.headPatchHash = patch.hash;
+      tile.headPatchHash = tile.resolveHeadPatchHash() ?? patch.hash;
       touchedTiles.add(tile);
     }
     for (const tile of touchedTiles) this.rebuildSnapshot(tile);
@@ -302,11 +303,11 @@ export class CanvasRenderer {
     });
   }
 
-  getChunkParents(x: number, y: number): string[] {
+  getChunkParent(x: number, y: number): string {
     const tile = this.tiles.get(x, y);
     const entries = tile?.operationEntries;
-    if (entries?.length) return [entries[entries.length - 1].patchHash];
-    return tile?.headPatchHash ? [tile.headPatchHash] : [];
+    if (tile && entries?.length) return tile.resolveHeadPatchHash() ?? ROOT_PATCH_HASH;
+    return tile?.headPatchHash ?? ROOT_PATCH_HASH;
   }
 
   activateChunk(x: number, y: number): void {
@@ -400,8 +401,7 @@ export class CanvasRenderer {
     tile.containsEntireOperationOrder = replay.containsEntireOrder;
     const replayedHashes = new Set<string>();
     for (const patch of replay.patches) {
-      const operation = patch.operations.find((candidate) =>
-        candidate.chunk.x === tile.x && candidate.chunk.y === tile.y);
+      const operation = this.operationForTile(patch, tile);
       if (operation) {
         tile.addOperation(patch.hash, operation);
         replayedHashes.add(patch.hash);
@@ -413,7 +413,7 @@ export class CanvasRenderer {
         replayedHashes.add(entry.patchHash);
       }
     }
-    tile.headPatchHash = tile.operationEntries.at(-1)?.patchHash ?? tile.headPatchHash;
+    tile.headPatchHash = tile.resolveHeadPatchHash() ?? tile.headPatchHash;
     this.rebuildSnapshot(tile);
   }
 
@@ -487,7 +487,7 @@ export class CanvasRenderer {
 
   applyPatch(patch: Patch): boolean {
     const chunks = new Set<string>();
-    for (const operation of patch.operations) {
+    for (const operation of patch.operations.filter((candidate) => candidate.type === "blend")) {
       const key = `${operation.chunk.x},${operation.chunk.y}`;
       if (chunks.has(key)) {
         throw new Error(`Patch ${patch.hash} contains multiple operations for chunk ${key}.`);
@@ -498,21 +498,30 @@ export class CanvasRenderer {
     this.optimisticPatchHashes.delete(patch.hash);
     const replayTiles = new Set<Tile>();
     let applied = false;
+    const candidates: { tile: Tile; operation: RenderableOperation }[] = [];
     for (const operation of patch.operations) {
-      if (!this.viewport || !containsChunk(this.viewport, operation.chunk.x, operation.chunk.y)) continue;
-      const tile = this.tiles.get(operation.chunk.x, operation.chunk.y);
-      if (!tile) continue;
+      if (operation.type === "blend") {
+        const tile = this.tiles.get(operation.chunk.x, operation.chunk.y);
+        if (tile) candidates.push({ tile, operation: { ...operation, imageBytes: patch.imageFor(operation) } });
+      } else {
+        for (const tile of this.tiles) {
+          if (tile.operationEntries.some((entry) => entry.patchHash === operation.targetPatchHash)) candidates.push({ tile, operation });
+        }
+      }
+    }
+    for (const { tile, operation } of candidates) {
+      if (!this.viewport || !containsChunk(this.viewport, tile.x, tile.y)) continue;
       if (!tile.isActive) continue;
       const knownEntries = new Set(tile.operationEntries.map((entry) => entry.patchHash));
       if (knownEntries.has(patch.hash)) continue;
-      const canApplyIncrementally = tile.containsEntireOperationOrder
-        || (operation.parents.length > 0 && operation.parents.every((parent) => knownEntries.has(parent)));
+      const parent = operation.type === "blend" ? operation.parent : operation.targetPatchHash;
+      const canApplyIncrementally = tile.containsEntireOperationOrder || parent === ROOT_PATCH_HASH || knownEntries.has(parent);
       if (!canApplyIncrementally) {
         replayTiles.add(tile);
         continue;
       }
       tile.addOperation(patch.hash, operation);
-      tile.headPatchHash = patch.hash;
+      tile.headPatchHash = tile.resolveHeadPatchHash() ?? patch.hash;
       this.rebuildSnapshot(tile);
       applied = true;
     }
@@ -555,20 +564,14 @@ export class CanvasRenderer {
     record.pending = true;
     this.emitHistoryChanged();
     try {
-      const operations: UndoOperation[] = record.entries.map(({ tile }) => ({
-        type: "undo",
-        chunk: { x: tile.x, y: tile.y },
-        parents: [record.toggleHeadHash],
-      }));
+      const operations: UndoOperation[] = [{ type: "undo", targetPatchHash: record.toggleHeadHash }];
       const patch = await Patch.create(operations, await this.identity);
       this.optimisticPatchHashes.add(patch.hash);
       record.toggleHeadHash = patch.hash;
       const touchedTiles = new Set<Tile>();
       for (const { tile } of record.entries) {
-        const operation = operations.find((candidate) =>
-          candidate.chunk.x === tile.x && candidate.chunk.y === tile.y)!;
-        tile.addOperation(patch.hash, operation);
-        tile.headPatchHash = patch.hash;
+        tile.addOperation(patch.hash, operations[0]);
+        tile.headPatchHash = tile.resolveHeadPatchHash() ?? patch.hash;
         touchedTiles.add(tile);
       }
       for (const tile of touchedTiles) this.rebuildSnapshot(tile);
@@ -587,6 +590,18 @@ export class CanvasRenderer {
       record.pending = false;
       this.emitHistoryChanged();
     }
+  }
+
+  private operationForTile(patch: Patch, tile: Tile): RenderableOperation | undefined {
+    for (const operation of patch.operations) {
+      if (operation.type === "blend" && operation.chunk.x === tile.x && operation.chunk.y === tile.y) {
+        return { ...operation, imageBytes: patch.imageFor(operation) };
+      }
+      if (operation.type === "undo" && tile.operationEntries.some((entry) => entry.patchHash === operation.targetPatchHash)) {
+        return operation;
+      }
+    }
+    return undefined;
   }
 
   private emitHistoryChanged(): void {

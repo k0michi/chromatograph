@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import PNG
 import Testing
@@ -20,11 +21,11 @@ struct ChunkManagerTests {
         hash: secondHash,
         operation: .blend(.init(
           chunk: second.chunk,
-          parents: [firstHash],
+          parent: firstHash,
           compositeOp: second.compositeOp,
           blendMode: second.blendMode,
           opacity: second.opacity,
-          imageBytes: second.imageBytes
+          payloadHash: second.payloadHash
         ))
       ))
 
@@ -45,7 +46,7 @@ struct ChunkManagerTests {
     try await manager.apply(
       patch(
         hash: undoHash,
-        operation: .undo(.init(chunk: .init(x: 0, y: 0), parents: [blendHash]))
+        operation: .undo(.init(targetPatchHash: blendHash))
       ))
 
     let replay = try await manager.replay(x: 0, y: 0, from: undoHash)
@@ -70,11 +71,11 @@ struct ChunkManagerTests {
     )
     let invalid = BlendOperation(
       chunk: TileChunk(x: 1, y: 0),
-      parents: [],
+      parent: rootPatchHash,
       compositeOp: .sourceOver,
       blendMode: .normal,
-      opacity: 1,
-      imageBytes: Data([0, 1, 2])
+      opacity: 255,
+      payloadHash: registerManagerImage(Data([0, 1, 2]))
     )
 
     await #expect(throws: (any Error).self) {
@@ -86,7 +87,7 @@ struct ChunkManagerTests {
   }
 
   @Test
-  func rejectsMissingParentOnTheOperationChunkWithoutMutation() async throws {
+  func rejectsMissingUndoTargetWithoutMutation() async throws {
     let manager = ChunkManager()
     let parentHash = hash("10")
     try await manager.apply(
@@ -96,17 +97,12 @@ struct ChunkManagerTests {
       ))
     let before = try await manager.snapshot(x: 0, y: 0)
 
-    await #expect(
-      throws: ChunkManagerError.missingParent(parentHash, TileChunk(x: 1, y: 0))
-    ) {
+    let missing = hash("99")
+    await #expect(throws: ChunkManagerError.missingParent(missing, TileChunk(x: 0, y: 0))) {
       try await manager.apply(
         patch(
           hash: hash("20"),
-          operation: .undo(
-            UndoOperation(
-              chunk: TileChunk(x: 1, y: 0),
-              parents: [parentHash]
-            ))
+          operation: .undo(UndoOperation(targetPatchHash: missing))
         ))
     }
     #expect(try await manager.snapshot(x: 0, y: 0) == before)
@@ -117,17 +113,20 @@ struct ChunkManagerTests {
   func rejectsDuplicateChunksInOnePatch() async throws {
     let manager = ChunkManager()
     let chunk = TileChunk(x: 0, y: 0)
+    let target = hash("01")
+    _ = try await manager.apply(patch(hash: target, operation: .blend(try blendOperation(color: .init(1, 2, 3, 255)))))
+    let before = try await manager.snapshot(x: 0, y: 0)
 
     await #expect(throws: ChunkManagerError.duplicateChunk(chunk)) {
       try await manager.apply(
         patch(
           hash: hash("10"),
           operations: [
-            .undo(UndoOperation(chunk: chunk, parents: [])),
-            .undo(UndoOperation(chunk: chunk, parents: [])),
+            .undo(UndoOperation(targetPatchHash: target)),
+            .undo(UndoOperation(targetPatchHash: target)),
           ]))
     }
-    #expect(try await manager.snapshot(x: 0, y: 0) == nil)
+    #expect(try await manager.snapshot(x: 0, y: 0) == before)
   }
 
   @Test
@@ -140,7 +139,7 @@ struct ChunkManagerTests {
       try await manager.apply(
         patch(
           hash: patchHash,
-          operation: .undo(UndoOperation(chunk: chunk, parents: [patchHash]))
+          operation: .undo(UndoOperation(targetPatchHash: patchHash))
         ))
     }
   }
@@ -163,7 +162,7 @@ struct ChunkManagerTests {
       patch(
         hash: undoHash,
         operation: ChromatographBackend.Operation.undo(
-          UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [blendHash])
+          UndoOperation(targetPatchHash: blendHash)
         )
       ))
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
@@ -172,7 +171,7 @@ struct ChunkManagerTests {
       patch(
         hash: hash("30"),
         operation: ChromatographBackend.Operation.undo(
-          UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [undoHash])
+          UndoOperation(targetPatchHash: undoHash)
         )
       ))
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
@@ -195,56 +194,25 @@ struct ChunkManagerTests {
       patch(
         hash: firstUndo,
         operation: ChromatographBackend.Operation.undo(
-          UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [blendHash])
+          UndoOperation(targetPatchHash: blendHash)
         )
       ))
     try await manager.apply(
       patch(
         hash: hash("70"),
         operation: ChromatographBackend.Operation.undo(
-          UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [firstUndo])
+          UndoOperation(targetPatchHash: firstUndo)
         )
       ))
     try await manager.apply(
       patch(
         hash: hash("90"),
         operation: ChromatographBackend.Operation.undo(
-          UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [blendHash])
+          UndoOperation(targetPatchHash: blendHash)
         )
       ))
 
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
-  }
-
-  @Test
-  func rejectsUndoWhoseParentsRepresentDifferentStates() async throws {
-    let manager = ChunkManager()
-    let first = hash("10")
-    let second = hash("20")
-    try await manager.apply(
-      patch(
-        hash: first,
-        operation: ChromatographBackend.Operation.blend(
-          try blendOperation(color: PNG.RGBA<UInt8>(255, 0, 0, 255))
-        )
-      ))
-    try await manager.apply(
-      patch(
-        hash: second,
-        operation: ChromatographBackend.Operation.blend(
-          try blendOperation(color: PNG.RGBA<UInt8>(0, 0, 255, 255))
-        )
-      ))
-
-    await #expect(throws: ChunkManagerError.invalidUndoParents(hash("30"))) {
-      try await manager.apply(
-        patch(
-          hash: hash("30"),
-          operation: ChromatographBackend.Operation.undo(
-            UndoOperation(chunk: TileChunk(x: 0, y: 0), parents: [first, second])
-          )
-        ))
-    }
   }
 
   @Test
@@ -260,11 +228,10 @@ struct ChunkManagerTests {
       metadataDirectory: metadata,
       snapshotDirectory: snapshotCache
     )
-    let patchHash = hash("10")
+    let storedPatch = try canonicalPatch(operations: [.blend(try blendOperation(color: .init(255, 0, 0, 255)))])
+    let patchHash = storedPatch.hash
     let firstManager = ChunkManager(store: store)
-    try await firstManager.apply(
-      patch(hash: patchHash, operation: .blend(try blendOperation(color: .init(255, 0, 0, 255))))
-    )
+    try await firstManager.apply(storedPatch)
 
     let restoredManager = ChunkManager(store: try FileSystemChunkStore(
       metadataDirectory: metadata,
@@ -310,12 +277,21 @@ private func patch(hash: String, operation: ChromatographBackend.Operation) -> P
 }
 
 private func patch(hash: String, operations: [ChromatographBackend.Operation]) -> Patch {
-  .init(
+  let hashes = Set(operations.compactMap { if case .blend(let blend) = $0 { blend.payloadHash } else { nil } }).sorted()
+  return .init(
     operations: operations,
     publicKeyHex: String(repeating: "11", count: 32),
+    timestamp: 0,
     hash: hash,
-    signatureHex: String(repeating: "33", count: 64)
+    signatureHex: String(repeating: "33", count: 64),
+    images: hashes.compactMap { managerImages[$0] }
   )
+}
+
+private func canonicalPatch(operations: [ChromatographBackend.Operation]) throws -> Patch {
+  let publicKey = String(repeating: "11", count: 32)
+  let payload = try OperationPacketCodec.encodePayload(operations: operations, publicKeyHex: publicKey, timestamp: 0)
+  return patch(hash: Data(SHA256.hash(data: payload)).cborHex, operations: operations)
 }
 
 private func blendOperation(
@@ -330,14 +306,23 @@ private func blendOperation(
   )
   var destination = TestPNGDestination()
   try image.compress(stream: &destination, level: 0)
+  let data = Data(destination.bytes)
+  let payloadHash = registerManagerImage(data)
   return .init(
     chunk: chunk,
-    parents: [],
+    parent: rootPatchHash,
     compositeOp: .sourceOver,
     blendMode: .normal,
-    opacity: 1,
-    imageBytes: Data(destination.bytes)
+    opacity: 255,
+    payloadHash: payloadHash
   )
+}
+
+nonisolated(unsafe) private var managerImages: [String: Data] = [:]
+private func registerManagerImage(_ data: Data) -> String {
+  let value = Data(SHA256.hash(data: data)).cborHex
+  managerImages[value] = data
+  return value
 }
 
 private struct TestPNGDestination: PNG.BytestreamDestination {

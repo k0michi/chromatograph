@@ -1,7 +1,7 @@
 import type { BindGroup } from "~/webgl/BindGroup";
 import type { Framebuffer } from "~/webgl/Framebuffer";
 import type { Texture } from "~/webgl/Texture";
-import type { BlendOperation, Operation } from "./Operation";
+import { ROOT_PATCH_HASH, type RenderableBlendOperation, type RenderableOperation } from "./Operation";
 
 export const TILE_SIZE = 256;
 
@@ -13,7 +13,7 @@ export interface TileSnapshot {
 
 export interface TileOperationEntry {
   readonly patchHash: string;
-  readonly op: Operation;
+  readonly op: RenderableOperation;
 }
 
 export class Tile {
@@ -29,19 +29,46 @@ export class Tile {
     readonly y: number,
   ) { }
 
-  addOperation(patchHash: string, op: Operation): TileOperationEntry {
+  addOperation(patchHash: string, op: RenderableOperation): TileOperationEntry {
     const entry: TileOperationEntry = { patchHash, op };
     this.operationEntries.push(entry);
     return entry;
   }
 
-  resolveActiveBlendEntries(): readonly (TileOperationEntry & { readonly op: BlendOperation })[] {
+  /** Last node of the deterministic, hash-sorted depth-first linearization. */
+  resolveHeadPatchHash(): string | null {
+    const byHash = new Map(this.operationEntries.map((entry) => [entry.patchHash, entry]));
+    const children = new Map<string, TileOperationEntry[]>();
+    const roots: TileOperationEntry[] = [];
+    for (const entry of this.operationEntries) {
+      const parent = entry.op.type === "blend" ? entry.op.parent : entry.op.targetPatchHash;
+      if (parent === ROOT_PATCH_HASH || !byHash.has(parent)) roots.push(entry);
+      else {
+        const values = children.get(parent) ?? [];
+        values.push(entry);
+        children.set(parent, values);
+      }
+    }
+    let last: string | null = null;
+    const visited = new Set<string>();
+    const visit = (entry: TileOperationEntry): void => {
+      if (!visited.add(entry.patchHash)) return;
+      last = entry.patchHash;
+      for (const child of (children.get(entry.patchHash) ?? []).sort((a, b) => a.patchHash.localeCompare(b.patchHash))) visit(child);
+    };
+    for (const root of roots.sort((a, b) => a.patchHash.localeCompare(b.patchHash))) visit(root);
+    if (visited.size !== this.operationEntries.length) throw new Error("A cycle was found in the Patch DAG.");
+    return last;
+  }
+
+  resolveActiveBlendEntries(): readonly (TileOperationEntry & { readonly op: RenderableBlendOperation })[] {
     const byHash = new Map(this.operationEntries.map((entry) => [entry.patchHash, entry]));
     const childrenByHash = new Map<string, TileOperationEntry[]>();
     const parentCountByHash = new Map<string, number>();
 
     for (const entry of this.operationEntries) {
-      const parents = entry.op.parents.filter((parent) => byHash.has(parent));
+      const parent = entry.op.type === "blend" ? entry.op.parent : entry.op.targetPatchHash;
+      const parents = parent === ROOT_PATCH_HASH || !byHash.has(parent) ? [] : [parent];
       parentCountByHash.set(entry.patchHash, parents.length);
       for (const parent of parents) {
         const children = childrenByHash.get(parent) ?? [];
@@ -70,7 +97,7 @@ export class Tile {
         return { blendHashes: [hash], visible: true };
       }
       const nextVisiting = new Set(visiting).add(hash);
-      const parentSubjects = entry.op.parents
+      const parentSubjects = [entry.op.targetPatchHash]
         .map((parent) => resolveUndoSubject(parent, nextVisiting))
         .filter((subject): subject is UndoSubject => subject !== null);
       const first = parentSubjects[0];
@@ -85,8 +112,9 @@ export class Tile {
       return { blendHashes: first.blendHashes, visible: !first.visible };
     };
 
-    for (const undo of this.operationEntries.filter((entry) => entry.op.type === "undo")) {
-      const parentSubjects = undo.op.parents
+    for (const undo of this.operationEntries) {
+      if (undo.op.type !== "undo") continue;
+      const parentSubjects = [undo.op.targetPatchHash]
         .map((parent) => resolveUndoSubject(parent))
         .filter((subject): subject is UndoSubject => subject !== null);
       const first = parentSubjects[0];
@@ -147,7 +175,7 @@ export class Tile {
       throw new Error("A cycle was found in the Patch DAG.");
     }
 
-    return ordered.filter((entry): entry is TileOperationEntry & { readonly op: BlendOperation } =>
+    return ordered.filter((entry): entry is TileOperationEntry & { readonly op: RenderableBlendOperation } =>
       entry.op.type === "blend" && isActive(entry.patchHash));
   }
 }

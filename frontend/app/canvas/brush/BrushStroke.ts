@@ -2,7 +2,7 @@ import { mat3 } from "gl-matrix";
 import type { Texture } from "~/webgl/Texture";
 import type { CanvasRenderer } from "../CanvasRenderer";
 import { CHUNK_VIEW_PROJECTION } from "../chunkSpace";
-import { BlendMode, CompositeOp, type BlendOperation } from "../Operation";
+import { BlendMode, CompositeOp, type PendingBlendOperation } from "../Operation";
 import { TILE_SIZE, type TileSnapshot } from "../Tile";
 import { encodePngInWorker } from "../PngEncoderWorker";
 import type { Brush } from "./Brush";
@@ -109,15 +109,15 @@ export class BrushStroke {
 
     const touched = Array.from(this.touchedChunks.values());
     try {
-      const operations: BlendOperation[] = await Promise.all(touched.map(async (accumulation) => {
+      const operations: PendingBlendOperation[] = await Promise.all(touched.map(async (accumulation) => {
         const rgba = await accumulation.source.snapshot.framebuffer.readRgba8Async(TILE_SIZE, TILE_SIZE);
         return {
           type: "blend",
           chunk: { x: accumulation.chunkX, y: accumulation.chunkY },
-          parents: this.renderer.getChunkParents(accumulation.chunkX, accumulation.chunkY),
+          parent: this.renderer.getChunkParent(accumulation.chunkX, accumulation.chunkY),
           compositeOp: this.compositeOp,
           blendMode: BlendMode.Normal,
-          opacity: 1,
+          opacity: 255,
           imageBytes: await encodePngInWorker(rgba, TILE_SIZE, TILE_SIZE),
         };
       }));
@@ -144,7 +144,7 @@ export class BrushStroke {
     const clampedPressure = Math.min(1, Math.max(0, pressure));
     const sizeFactor = 1 - pressureSize * (1 - clampedPressure);
     const stampSize = Math.max(1, size * sizeFactor);
-    const stampOpacity = opacity * (1 - pressureOpacity * (1 - clampedPressure));
+    const stampOpacity = Math.round(opacity * (1 - pressureOpacity * (1 - clampedPressure)) * 255) / 255;
 
     const minChunkX = Math.floor((worldX - stampSize / 2) / TILE_SIZE);
     const maxChunkX = Math.floor((worldX + stampSize / 2) / TILE_SIZE);

@@ -20,10 +20,9 @@ private struct SnapshotRequest: Decodable {
 }
 
 private func validatePatchImages(_ patch: Patch) throws {
-  for operation in patch.operations {
-    guard case .blend(let blend) = operation else { continue }
+  for image in patch.images {
     try PNGValidator.validateRGBA8(
-      blend.imageBytes,
+      image,
       width: patchImageSize,
       height: patchImageSize
     )

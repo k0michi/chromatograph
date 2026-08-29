@@ -40,6 +40,7 @@ actor ChunkManager {
   private var patchCache: LRUCache<String, Patch>
   private var headPatchHashes: [TileChunkKey: String] = [:]
   private var committedHashes: Set<String> = []
+  private var chunksByPatchHash: [String: Set<TileChunkKey>] = [:]
   private let store: any ChunkStore
   private var isLoaded = false
 
@@ -69,14 +70,8 @@ actor ChunkManager {
 
     var touched: Set<TileChunkKey> = []
     var candidateEntries = entriesByChunk
-    for operation in patch.operations {
-      let key = TileChunkKey(operation.chunk)
-      candidateEntries[key, default: []].append(Entry(
-        patchHash: patch.hash,
-        chunk: operation.chunk,
-        parents: operation.parents,
-        blend: operation.blendParameters
-      ))
+    for (key, entry) in try expandedEntries(for: patch) {
+      candidateEntries[key, default: []].append(entry)
       touched.insert(key)
     }
     var candidateSnapshots: [TileChunkKey: [UInt8]] = [:]
@@ -104,6 +99,7 @@ actor ChunkManager {
       headPatchHashes[TileChunkKey(snapshot.chunk)] = snapshot.headPatchHash
     }
     committedHashes.insert(patch.hash)
+    chunksByPatchHash[patch.hash] = touched
     return encodedSnapshots
   }
 
@@ -167,17 +163,10 @@ actor ChunkManager {
     }
 
     let base = try render(Array(ordered[..<replayIndex]))
+    var replayed: Set<String> = []
     let patches = try ordered[replayIndex...].compactMap { entry -> Patch? in
-      guard let patch = try loadPatch(entry.patchHash) else { return nil }
-      guard let operation = patch.operations.first(where: { $0.chunk == entry.chunk }) else {
-        return nil
-      }
-      return Patch(
-        operations: [operation],
-        publicKeyHex: patch.publicKeyHex,
-        hash: patch.hash,
-        signatureHex: patch.signatureHex
-      )
+      guard replayed.insert(entry.patchHash).inserted else { return nil }
+      return try loadPatch(entry.patchHash)
     }
     return ChunkReplay(
       containsEntireOrder: replayIndex == 0,
@@ -217,16 +206,31 @@ actor ChunkManager {
     guard !isLoaded else { return }
     let state = try store.load()
     var restoredEntries: [TileChunkKey: [Entry]] = [:]
+    let summaries = Dictionary(uniqueKeysWithValues: state.patches.map { ($0.hash, $0) })
+    func resolveChunks(_ hash: String, visiting: Set<String> = []) throws -> Set<TileChunkKey> {
+      if let cached = chunksByPatchHash[hash] { return cached }
+      guard !visiting.contains(hash), let summary = summaries[hash] else { throw ChunkManagerError.cycle(hash) }
+      var next = visiting; next.insert(hash); var result: Set<TileChunkKey> = []
+      for operation in summary.operations {
+        switch operation {
+        case .blend(let blend): result.insert(TileChunkKey(blend.chunk))
+        case .undo(let undo): result.formUnion(try resolveChunks(undo.targetPatchHash, visiting: next))
+        }
+      }
+      chunksByPatchHash[hash] = result; return result
+    }
     for patch in state.patches {
+      _ = try resolveChunks(patch.hash)
       for operation in patch.operations {
-        restoredEntries[TileChunkKey(operation.chunk), default: []].append(
-          Entry(
-            patchHash: patch.hash,
-            chunk: operation.chunk,
-            parents: operation.parents,
-            blend: operation.blend
-          )
-        )
+        switch operation {
+        case .blend(let blend):
+          let key = TileChunkKey(blend.chunk)
+          restoredEntries[key, default: []].append(Entry(patchHash: patch.hash, chunk: blend.chunk, parents: blend.parent == rootPatchHash ? [] : [blend.parent], blend: operation.blendParameters))
+        case .undo(let undo):
+          for key in chunksByPatchHash[undo.targetPatchHash] ?? [] {
+            restoredEntries[key, default: []].append(Entry(patchHash: patch.hash, chunk: .init(x: key.x, y: key.y), parents: [undo.targetPatchHash], blend: nil))
+          }
+        }
       }
       committedHashes.insert(patch.hash)
     }
@@ -248,25 +252,52 @@ actor ChunkManager {
     var chunks: Set<TileChunkKey> = []
 
     for operation in patch.operations {
-      let chunk = operation.chunk
-      let key = TileChunkKey(chunk)
-      guard chunks.insert(key).inserted else {
-        throw ChunkManagerError.duplicateChunk(chunk)
-      }
-
-      var parents: Set<String> = []
-      for parent in operation.parents {
-        guard parents.insert(parent).inserted else {
-          throw ChunkManagerError.duplicateParent(parent)
+      switch operation {
+      case .blend(let blend):
+        let key = TileChunkKey(blend.chunk)
+        guard chunks.insert(key).inserted else { throw ChunkManagerError.duplicateChunk(blend.chunk) }
+        guard blend.parent != patch.hash else { throw ChunkManagerError.selfParent(blend.parent, blend.chunk) }
+        if blend.parent != rootPatchHash && entriesByChunk[key]?.contains(where: { $0.patchHash == blend.parent }) != true {
+          throw ChunkManagerError.missingParent(blend.parent, blend.chunk)
         }
-        guard parent != patch.hash else {
-          throw ChunkManagerError.selfParent(parent, chunk)
-        }
-        guard entriesByChunk[key]?.contains(where: { $0.patchHash == parent }) == true else {
-          throw ChunkManagerError.missingParent(parent, chunk)
+      case .undo(let undo):
+        guard undo.targetPatchHash != patch.hash else { throw ChunkManagerError.selfParent(undo.targetPatchHash, .init(x: 0, y: 0)) }
+        guard let targetChunks = chunksByPatchHash[undo.targetPatchHash] else { throw ChunkManagerError.missingParent(undo.targetPatchHash, .init(x: 0, y: 0)) }
+        for key in targetChunks {
+          let chunk = TileChunk(x: key.x, y: key.y)
+          guard chunks.insert(key).inserted else { throw ChunkManagerError.duplicateChunk(chunk) }
         }
       }
     }
+  }
+
+  private func expandedEntries(for patch: Patch) throws -> [(TileChunkKey, Entry)] {
+    var result: [(TileChunkKey, Entry)] = []
+    for operation in patch.operations {
+      switch operation {
+      case .blend(let blend):
+        let key = TileChunkKey(blend.chunk)
+        result.append((key, Entry(
+          patchHash: patch.hash,
+          chunk: blend.chunk,
+          parents: blend.parent == rootPatchHash ? [] : [blend.parent],
+          blend: operation.blendParameters
+        )))
+      case .undo(let undo):
+        guard let keys = chunksByPatchHash[undo.targetPatchHash] else {
+          throw ChunkManagerError.missingParent(undo.targetPatchHash, .init(x: 0, y: 0))
+        }
+        for key in keys {
+          result.append((key, Entry(
+            patchHash: patch.hash,
+            chunk: .init(x: key.x, y: key.y),
+            parents: [undo.targetPatchHash],
+            blend: nil
+          )))
+        }
+      }
+    }
+    return result
   }
 
   private func render(_ entries: [Entry]) throws -> [UInt8] {
@@ -280,7 +311,7 @@ actor ChunkManager {
       try Compositor.blend(
         source: source,
         onto: &rgba,
-        opacity: blend.opacity,
+        opacity: Float(blend.opacity) / 255,
         compositeOp: blend.compositeOp,
         blendMode: blend.blendMode
       )
@@ -300,7 +331,10 @@ actor ChunkManager {
   private func blendImage(patchHash: String, chunk: TileChunk) throws -> Data? {
     guard let patch = try loadPatch(patchHash) else { return nil }
     for operation in patch.operations {
-      if case .blend(let blend) = operation, blend.chunk == chunk { return blend.imageBytes }
+      if case .blend(let blend) = operation, blend.chunk == chunk,
+         let index = patch.operations.compactMap({ op -> String? in if case .blend(let value) = op { return value.payloadHash }; return nil }).uniqueSorted.firstIndex(of: blend.payloadHash) {
+        return patch.images[index]
+      }
     }
     return nil
   }
@@ -483,20 +517,6 @@ private struct TileChunkKey: Hashable, Comparable {
 }
 
 extension Operation {
-  fileprivate var chunk: TileChunk {
-    switch self {
-    case .blend(let operation): operation.chunk
-    case .undo(let operation): operation.chunk
-    }
-  }
-
-  fileprivate var parents: [String] {
-    switch self {
-    case .blend(let operation): operation.parents
-    case .undo(let operation): operation.parents
-    }
-  }
-
   fileprivate var isUndo: Bool {
     if case .undo = self { return true }
     return false
@@ -510,4 +530,8 @@ extension Operation {
       opacity: operation.opacity
     )
   }
+}
+
+private extension Array where Element == String {
+  var uniqueSorted: [String] { Array(Set(self)).sorted() }
 }

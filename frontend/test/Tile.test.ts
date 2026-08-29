@@ -1,21 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { BlendMode, CompositeOp, type BlendOperation, type UndoOperation } from "../app/canvas/Operation";
+import { BlendMode, CompositeOp, ROOT_PATCH_HASH, type RenderableBlendOperation, type UndoOperation } from "../app/canvas/Operation";
 import { Tile } from "../app/canvas/Tile";
 
-function blend(parents: readonly string[] = []): BlendOperation {
+function blend(parents: readonly string[] = []): RenderableBlendOperation {
   return {
     type: "blend",
     chunk: { x: 0, y: 0 },
-    parents,
+    parent: parents[0] ?? ROOT_PATCH_HASH,
     compositeOp: CompositeOp.SourceOver,
     blendMode: BlendMode.Normal,
-    opacity: 1,
+    opacity: 255,
+    payloadHash: "aa".repeat(32),
     imageBytes: new Uint8Array(),
   };
 }
 
 function undo(parents: readonly string[]): UndoOperation {
-  return { type: "undo", chunk: { x: 0, y: 0 }, parents };
+  return { type: "undo", targetPatchHash: parents[0] };
 }
 
 describe("Tile Patch DAG resolution", () => {
@@ -90,31 +91,4 @@ describe("Tile Patch DAG resolution", () => {
     expect(tile.resolveActiveBlendEntries()).toEqual([]);
   });
 
-  it("restores a blend when a merged undo chain ends with a redo", () => {
-    const tile = new Tile(0, 0);
-    tile.addOperation("10", blend());
-    tile.addOperation("20", undo(["10"]));
-    tile.addOperation("30", undo(["10"]));
-    tile.addOperation("40", undo(["20", "30"]));
-
-    expect(tile.resolveActiveBlendEntries().map((entry) => entry.patchHash)).toEqual(["10"]);
-  });
-
-  it("rejects targets for the same Blend when their visibility states differ", () => {
-    const tile = new Tile(0, 0);
-    tile.addOperation("10", blend());
-    tile.addOperation("20", undo(["10"]));
-    tile.addOperation("30", undo(["10", "20"]));
-
-    expect(() => tile.resolveActiveBlendEntries()).toThrow(/same Blend state/);
-  });
-
-  it("rejects targets that refer to different Blends", () => {
-    const tile = new Tile(0, 0);
-    tile.addOperation("10", blend());
-    tile.addOperation("20", blend(["10"]));
-    tile.addOperation("30", undo(["10", "20"]));
-
-    expect(() => tile.resolveActiveBlendEntries()).toThrow(/same Blend state/);
-  });
 });

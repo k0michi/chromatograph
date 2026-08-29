@@ -4,9 +4,9 @@ import Foundation
 /// this; the operation images stay on disk until a render or replay pulls them.
 struct PatchSummary: Sendable {
   let hash: String
-  let operations: [OperationSummary]
+  let operations: [Operation]
 
-  init(hash: String, operations: [OperationSummary]) {
+  init(hash: String, operations: [Operation]) {
     self.hash = hash
     self.operations = operations
   }
@@ -14,45 +14,15 @@ struct PatchSummary: Sendable {
   init(_ patch: Patch) {
     self.init(
       hash: patch.hash,
-      operations: patch.operations.map(OperationSummary.init)
+      operations: patch.operations
     )
-  }
-}
-
-struct OperationSummary: Sendable {
-  let chunk: TileChunk
-  let parents: [String]
-  /// `nil` marks an undo operation, which carries no pixels.
-  let blend: BlendParameters?
-
-  init(chunk: TileChunk, parents: [String], blend: BlendParameters?) {
-    self.chunk = chunk
-    self.parents = parents
-    self.blend = blend
-  }
-
-  init(_ operation: Operation) {
-    switch operation {
-    case .blend(let operation):
-      self.init(
-        chunk: operation.chunk,
-        parents: operation.parents,
-        blend: BlendParameters(
-          compositeOp: operation.compositeOp,
-          blendMode: operation.blendMode,
-          opacity: operation.opacity
-        )
-      )
-    case .undo(let operation):
-      self.init(chunk: operation.chunk, parents: operation.parents, blend: nil)
-    }
   }
 }
 
 struct BlendParameters: Sendable, Equatable {
   let compositeOp: CompositeOp
   let blendMode: BlendMode
-  let opacity: Float
+  let opacity: UInt8
 }
 
 struct StoredChunkState: Sendable {

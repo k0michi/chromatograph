@@ -64,11 +64,11 @@ struct AppTests {
       .blend(
         BlendOperation(
           chunk: TileChunk(x: 0, y: 0),
-          parents: [],
+          parent: rootPatchHash,
           compositeOp: .sourceOver,
           blendMode: .normal,
-          opacity: 1,
-          imageBytes: try testPNG()
+          opacity: 255,
+          payloadHash: registerTestImage(try testPNG())
         ))
     ])
     let packet = ByteBuffer(bytes: try PatchPacketCodec.encode(largePatch))
@@ -96,11 +96,11 @@ struct AppTests {
       .blend(
         BlendOperation(
           chunk: TileChunk(x: 0, y: 0),
-          parents: [],
+          parent: rootPatchHash,
           compositeOp: .sourceOver,
           blendMode: .normal,
-          opacity: 1,
-          imageBytes: Data([0, 1, 2])
+          opacity: 255,
+          payloadHash: registerTestImage(Data([0, 1, 2]))
         ))
     ])
     let packet = ByteBuffer(bytes: try PatchPacketCodec.encode(patch))
@@ -242,11 +242,11 @@ private func testPNG() throws -> Data {
 private func testBlendOperation(chunk: TileChunk) throws -> BlendOperation {
   BlendOperation(
     chunk: chunk,
-    parents: [],
+    parent: rootPatchHash,
     compositeOp: .sourceOver,
     blendMode: .normal,
-    opacity: 1,
-    imageBytes: try testPNG()
+    opacity: 255,
+    payloadHash: registerTestImage(try testPNG())
   )
 }
 
@@ -292,15 +292,26 @@ private func testPatch(
     rawRepresentation: Data(repeating: 0x42, count: 32)
   )
   let publicKey = privateKey.publicKey.rawRepresentation
-  let operationBytes = try OperationPacketCodec.encode(operations)
-  let hash = Data(SHA256.hash(data: operationBytes + publicKey))
-  let signature = try privateKey.signature(for: hash)
+  let timestamp: UInt64 = 123
+  let payload = try OperationPacketCodec.encodePayload(operations: operations, publicKeyHex: publicKey.hexString, timestamp: timestamp)
+  let hash = Data(SHA256.hash(data: payload))
+  let signature = try privateKey.signature(for: payload)
+  let hashes = Set(operations.compactMap { if case .blend(let blend) = $0 { blend.payloadHash } else { nil } }).sorted()
   return Patch(
     operations: operations,
     publicKeyHex: publicKey.hexString,
+    timestamp: timestamp,
     hash: hash.hexString,
-    signatureHex: signature.hexString
+    signatureHex: signature.hexString,
+    images: hashes.compactMap { testImageRegistry[$0] }
   )
+}
+
+nonisolated(unsafe) private var testImageRegistry: [String: Data] = [:]
+private func registerTestImage(_ data: Data) -> String {
+  let hash = Data(SHA256.hash(data: data)).hexString
+  testImageRegistry[hash] = data
+  return hash
 }
 
 extension Data {

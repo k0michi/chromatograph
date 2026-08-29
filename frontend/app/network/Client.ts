@@ -242,7 +242,9 @@ export class Client implements Disposable {
       if (kind === 1) {
         const patch = PatchDecoder.decode(payload);
         this.logPacket("receive", "Patch", data.byteLength, `hash ${this.shortHash(patch.hash)}`);
-        if (!this.viewport || !patch.operations.some((operation) =>
+        if (!this.viewport) return;
+        const blendOperations = patch.operations.filter((operation) => operation.type === "blend");
+        if (blendOperations.length > 0 && !blendOperations.some((operation) =>
           containsChunk(this.viewport!, operation.chunk.x, operation.chunk.y))) return;
         for (const listener of this.patchListeners) listener(patch);
       } else if (kind === 2) {
