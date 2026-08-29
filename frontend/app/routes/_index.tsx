@@ -19,6 +19,7 @@ import { useReader } from "~/store/Store";
 import { KeyringStore } from "~/crypto/KeyringStore";
 import { KeySettings } from "~/crypto/KeySettings";
 import { ShortcutManager } from "~/ui/ShortcutManager";
+import { ColorControl } from "~/ui/ColorControl";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -185,7 +186,8 @@ export default function Index() {
   const shortcutsRef = useRef(shortcuts);
   shortcutsRef.current = shortcuts;
 
-  const [color, setColor] = useState("#222222");
+  const [foregroundColor, setForegroundColor] = useState("#000000");
+  const [backgroundColor, setBackgroundColor] = useState("#ffffff");
   const [tool, setTool] = useState<Tool>("brush");
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
@@ -206,6 +208,12 @@ export default function Index() {
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const isSpaceHeldRef = useRef(false);
+  const swapColors = () => {
+    setForegroundColor(backgroundColor);
+    setBackgroundColor(foregroundColor);
+  };
+  const swapColorsRef = useRef(swapColors);
+  swapColorsRef.current = swapColors;
 
   const menus: MenuBarMenu[] = [
     {
@@ -280,7 +288,7 @@ export default function Index() {
     if (!brush) {
       return;
     }
-    brush.settings.color = color;
+    brush.settings.color = foregroundColor;
     brush.settings.size = size;
     brush.settings.hardness = hardness;
     brush.settings.opacity = opacity;
@@ -289,7 +297,7 @@ export default function Index() {
     brush.settings.compositeOp = compositeOp;
     brush.settings.pressureSize = penPressureSize ? 1 : 0;
     brush.settings.pressureOpacity = penPressureOpacity ? 1 : 0;
-  }, [color, size, hardness, opacity, spacing, smoothing, compositeOp, penPressureSize, penPressureOpacity]);
+  }, [foregroundColor, size, hardness, opacity, spacing, smoothing, compositeOp, penPressureSize, penPressureOpacity]);
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.showGrid = showGrid;
@@ -373,7 +381,7 @@ export default function Index() {
       compositeOp,
       size,
       hardness,
-      color,
+      color: foregroundColor,
       opacity,
       spacing,
       smoothing,
@@ -445,6 +453,10 @@ export default function Index() {
       }
       if (!event.ctrlKey && !event.metaKey && !event.altKey) {
         const key = event.key.toLowerCase();
+        if (key === "x") {
+          swapColorsRef.current();
+          return;
+        }
         if (key === "b") return setTool("brush");
         if (key === "e") return setTool("eraser");
         if (key === "h" || key === "v") return setTool("move");
@@ -782,25 +794,14 @@ export default function Index() {
           </button>
         ))}
         <div style={toolRailDividerStyle} />
-        <label
-          title="Color"
-          style={{
-            position: "relative",
-            width: 36,
-            height: 36,
-            borderRadius: 6,
-            border: "2px solid rgba(255, 255, 255, 0.35)",
-            background: color,
-            cursor: "pointer",
-          }}
-        >
-          <input
-            type="color"
-            value={color}
-            onChange={(event) => setColor(event.target.value)}
-            style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
-          />
-        </label>
+        <ColorControl
+          foreground={foregroundColor}
+          background={backgroundColor}
+          onForegroundChange={setForegroundColor}
+          onBackgroundChange={setBackgroundColor}
+          onSwap={swapColors}
+          onReset={() => { setForegroundColor("#000000"); setBackgroundColor("#ffffff"); }}
+        />
       </div>
       {showRulers ? <CanvasRulers ref={rulersRef} top={CHROME_TOP} left={52} right={300} /> : null}
       {/* Right sidebar (docked panels; will become movable windows later) */}
