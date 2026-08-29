@@ -22,6 +22,11 @@
   --ruler-fg: rgba(255, 255, 255, 0.72);
 }
 
+dialog::backdrop {
+  background: rgba(5, 7, 10, 0.58);
+  backdrop-filter: blur(2px);
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     --panel-bg: #f1f1f3;

@@ -24,4 +24,14 @@ describe("crypto primitives", () => {
     await expect(Identity.verify(identity.publicKeyHex, data, signature)).resolves.toBe(true);
     await expect(Identity.verify(identity.publicKeyHex, new TextEncoder().encode("modified"), signature)).resolves.toBe(false);
   });
+
+  it("round-trips an exported signing identity", async () => {
+    const original = await Identity.generate();
+    const exported = await original.exportJwk();
+    const imported = await Identity.fromJwk(exported.privateKey, exported.publicKey);
+    const data = new TextEncoder().encode("portable identity");
+
+    expect(imported.publicKeyHex).toBe(original.publicKeyHex);
+    await expect(imported.verify(data, await imported.sign(data))).resolves.toBe(true);
+  });
 });

@@ -96,7 +96,6 @@ export class CanvasRenderer {
   private snapshotApplyChain: Promise<void> = Promise.resolve();
   private readonly canvasContentRenderedListeners = new Set<CanvasContentRenderedListener>();
   private readonly canvasInvalidatedListeners = new Set<CanvasInvalidatedListener>();
-  private readonly identity: Promise<Identity> = Identity.generate();
   private viewport: ChunkViewport | null = null;
   private readonly knownChunks = new Map<string, ChunkCoordinate>();
   private readonly snapshotVersions = new Map<string, number>();
@@ -104,6 +103,7 @@ export class CanvasRenderer {
   constructor(
     canvas: HTMLCanvasElement,
     private readonly client: Client,
+    private readonly identityProvider: () => Promise<Identity> = Identity.generate,
   ) {
     this.context = new Context(canvas);
     this.gl = this.context.gl;
@@ -272,7 +272,7 @@ export class CanvasRenderer {
   }
 
   async commitPatch(operations: readonly PendingBlendOperation[]): Promise<void> {
-    const patch = await Patch.create(operations, await this.identity);
+    const patch = await Patch.create(operations, await this.identityProvider());
     this.optimisticPatchHashes.add(patch.hash);
     const entries: HistoryRecord["entries"] = [];
     const touchedTiles = new Set<Tile>();
@@ -565,7 +565,7 @@ export class CanvasRenderer {
     this.emitHistoryChanged();
     try {
       const operations: UndoOperation[] = [{ type: "undo", targetPatchHash: record.toggleHeadHash }];
-      const patch = await Patch.create(operations, await this.identity);
+      const patch = await Patch.create(operations, await this.identityProvider());
       this.optimisticPatchHashes.add(patch.hash);
       record.toggleHeadHash = patch.hash;
       const touchedTiles = new Set<Tile>();

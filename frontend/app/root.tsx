@@ -13,9 +13,15 @@ import "./theme.css";
 import { registerServiceWorker } from "~/pwa/registerServiceWorker";
 import { NetworkDebugStore } from "~/network/NetworkDebugStore";
 import { StoreProvider } from "~/store/Store";
+import { KeyringStore } from "~/crypto/KeyringStore";
 import type { Route } from "./+types/root";
 
 const createNetworkDebugStore = () => new NetworkDebugStore();
+const createKeyringStore = () => {
+  const store = new KeyringStore();
+  void store.initialize().catch((error: unknown) => console.error("Failed to load signing keys:", error));
+  return store;
+};
 
 export const links: Route.LinksFunction = () => [];
 
@@ -45,8 +51,10 @@ export default function App() {
   }, []);
 
   return (
-    <StoreProvider create={createNetworkDebugStore}>
-      <Outlet />
+    <StoreProvider create={createKeyringStore}>
+      <StoreProvider create={createNetworkDebugStore}>
+        <Outlet />
+      </StoreProvider>
     </StoreProvider>
   );
 }

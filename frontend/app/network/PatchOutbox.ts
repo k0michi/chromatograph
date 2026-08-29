@@ -1,3 +1,5 @@
+import { openChromatographDatabase } from "~/storage/Database";
+
 export interface OutboxPatch {
   readonly hash: string;
   readonly packet: Uint8Array<ArrayBuffer>;
@@ -15,8 +17,6 @@ interface StoredPatch {
   readonly packet: ArrayBuffer;
 }
 
-const DATABASE_NAME = "chromatograph";
-const DATABASE_VERSION = 1;
 const STORE_NAME = "patch-outbox";
 const HASH_INDEX = "hash";
 
@@ -73,13 +73,7 @@ export class IndexedDbPatchOutbox implements PatchOutbox {
   private database(): Promise<IDBDatabase> {
     if (this.databasePromise) return this.databasePromise;
     this.databasePromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-      request.onupgradeneeded = () => {
-        const store = request.result.createObjectStore(STORE_NAME, { keyPath: "id", autoIncrement: true });
-        store.createIndex(HASH_INDEX, HASH_INDEX, { unique: true });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      void openChromatographDatabase().then(resolve, reject);
     });
     return this.databasePromise;
   }

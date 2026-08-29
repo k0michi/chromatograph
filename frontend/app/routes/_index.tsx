@@ -16,6 +16,8 @@ import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/F
 import { MenuBar, type MenuBarMenu } from "~/ui/MenuBar";
 import { PanelWindow } from "~/ui/PanelWindow";
 import { useReader } from "~/store/Store";
+import { KeyringStore } from "~/crypto/KeyringStore";
+import { KeySettings } from "~/crypto/KeySettings";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -175,6 +177,7 @@ export default function Index() {
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
   const rulersRef = useRef<CanvasRulersHandle>(null);
   const networkDebugStore = useReader(NetworkDebugStore);
+  const keyringStore = useReader(KeyringStore);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
 
@@ -191,6 +194,7 @@ export default function Index() {
   const [showRulers, setShowRulers] = useState(true);
   const [cursorInspection, setCursorInspection] = useState<CursorInspection | null>(null);
   const [operationHistory, setOperationHistory] = useState<readonly OperationHistoryItem[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const isEraser = tool === "eraser";
   const isPaintTool = tool === "brush" || tool === "eraser";
@@ -200,6 +204,10 @@ export default function Index() {
   const isSpaceHeldRef = useRef(false);
 
   const menus: MenuBarMenu[] = [
+    {
+      label: "Chromatograph",
+      items: [{ label: "Settings…", shortcut: "⌘,", onSelect: () => setSettingsOpen(true) }],
+    },
     {
       label: "Edit",
       items: [
@@ -309,7 +317,7 @@ export default function Index() {
     const unsubscribeConnectionState = client.subscribeConnectionState((state) => {
       networkDebugStore.setConnectionState(state);
     });
-    const renderer = new CanvasRenderer(canvas, client);
+    const renderer = new CanvasRenderer(canvas, client, () => keyringStore.activeIdentity());
     rendererRef.current = renderer;
     const unsubscribeHistory = renderer.onHistoryChanged(() => {
       setOperationHistory(renderer.operationHistory);
@@ -616,6 +624,17 @@ export default function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onSettingsShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onSettingsShortcut);
+    return () => window.removeEventListener("keydown", onSettingsShortcut);
+  }, []);
+
   return (
     <>
       <canvas
@@ -802,6 +821,8 @@ export default function Index() {
           <NetworkDebugPanel />
         </PanelWindow>
       </aside>
+
+      <KeySettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
     </>
   );
