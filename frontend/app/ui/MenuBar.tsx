@@ -26,10 +26,14 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
   // True between a press on a title and its release: a drag-to-select may be in
   // progress, and releasing off any item should dismiss the menu.
   const draggingRef = useRef(false);
+  const dragOriginMenuRef = useRef<number | null>(null);
+  const crossedMenuTitleRef = useRef(false);
 
   useEffect(() => {
     if (open === null) {
       draggingRef.current = false;
+      dragOriginMenuRef.current = null;
+      crossedMenuTitleRef.current = false;
       return;
     }
     const isInsideMenu = (node: Node | null) =>
@@ -96,6 +100,7 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
             <button
               type="button"
               data-menubar-title=""
+              data-menu={index}
               onPointerDown={(event) => {
                 event.preventDefault();
                 // Drop the implicit (touch) pointer capture so a drag onto an
@@ -111,6 +116,8 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
                 }
                 setOpen(index);
                 draggingRef.current = true;
+                dragOriginMenuRef.current = index;
+                crossedMenuTitleRef.current = false;
                 // Registered synchronously so a fast drag-release is never missed.
                 window.addEventListener(
                   "pointerup",
@@ -120,16 +127,22 @@ export function MenuBar({ menus }: { menus: readonly MenuBarMenu[] }) {
                     const target = up.target as Element | null;
                     const atPoint = document.elementFromPoint(up.clientX, up.clientY);
                     if (selectFromElement(target) || selectFromElement(atPoint)) return;
-                    // Released outside the menu bar entirely: dismiss. Released on
-                    // a title (no item): leave it open in click mode.
-                    if (!atPoint?.closest("[data-menubar-root]")) {
+                    // A plain press/release on the originating title enters click
+                    // mode. Once the drag crosses another title, releasing without
+                    // selecting an item ends the menu-tracking session.
+                    if (crossedMenuTitleRef.current || !atPoint?.closest("[data-menubar-root]")) {
                       setOpen(null);
                     }
                   },
                   { once: true },
                 );
               }}
-              onPointerEnter={() => setOpen((current) => (current === null ? null : index))}
+              onPointerEnter={() => {
+                if (draggingRef.current && dragOriginMenuRef.current !== index) {
+                  crossedMenuTitleRef.current = true;
+                }
+                setOpen((current) => (current === null ? null : index));
+              }}
               onClick={(event) => {
                 // Keyboard activation (Enter/Space) reports detail 0.
                 if (event.detail === 0) setOpen(isOpen ? null : index);
