@@ -19,6 +19,7 @@ let package = Package(
         .package(url: "https://github.com/tayloraswift/swift-png.git", from: "4.5.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         .package(path: "./swift-libpng"),
+        .package(path: "./swift-cbor"),
     ],
     targets: [
         .executableTarget(
@@ -29,6 +30,7 @@ let package = Package(
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "LibPNG", package: "swift-libpng"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "CBOR", package: "swift-cbor"),
             ],
             path: "Sources/App"
         ),

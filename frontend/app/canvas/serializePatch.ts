@@ -1,9 +1,15 @@
 import { Hex } from "~/crypto/hex";
-import { BinaryReader } from "~/network/BinaryReader";
-import { BinaryWriter } from "~/network/BinaryWriter";
 import { PACKET_VERSION } from "~/network/PacketVersion";
 import { Patch } from "./Patch";
-import { OperationDecoder, OperationEncoder } from "./serializeOperations";
+import {
+  cborArray,
+  cborBytes,
+  cborUnsigned,
+  decodeCbor,
+  encodeCbor,
+  OperationDecoder,
+  OperationEncoder,
+} from "./serializeOperations";
 
 export class PatchEncoder {
   private static readonly publicKeyBytes = 32;
@@ -11,25 +17,18 @@ export class PatchEncoder {
   private static readonly signatureBytes = 64;
 
   static encode(patch: Patch): Uint8Array<ArrayBuffer> {
-    const operations = OperationEncoder.operations(patch.operations);
-    const publicKey = this.fixedHex(patch.publicKeyHex, this.publicKeyBytes, "public key");
-    const hash = this.fixedHex(patch.hash, this.hashBytes, "hash");
-    const signature = this.fixedHex(patch.signatureHex, this.signatureBytes, "signature");
-    const writer = new BinaryWriter();
-    writer.writeUInt32(PACKET_VERSION);
-    writer.writeUInt32(operations.length);
-    writer.writeBytes(operations);
-    writer.writeBytes(publicKey);
-    writer.writeBytes(hash);
-    writer.writeBytes(signature);
-    return writer.toBytes();
+    return encodeCbor([
+      PACKET_VERSION,
+      OperationEncoder.values(patch.operations),
+      this.fixedHex(patch.publicKeyHex, this.publicKeyBytes, "public key"),
+      this.fixedHex(patch.hash, this.hashBytes, "hash"),
+      this.fixedHex(patch.signatureHex, this.signatureBytes, "signature"),
+    ]);
   }
 
   private static fixedHex(value: string, byteCount: number, name: string): Uint8Array<ArrayBuffer> {
     const bytes = Hex.toBytes(value);
-    if (bytes.length !== byteCount) {
-      throw new Error(`A Patch ${name} must be ${byteCount} bytes.`);
-    }
+    if (bytes.length !== byteCount) throw new Error(`A Patch ${name} must be ${byteCount} bytes.`);
     return bytes;
   }
 }
@@ -41,18 +40,14 @@ export class PatchDecoder {
 
   static decode(packet: ArrayBuffer | Uint8Array<ArrayBufferLike>): Patch {
     const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
-    const reader = new BinaryReader(bytes);
-    const version = reader.readUInt32();
-    if (version !== PACKET_VERSION) {
-      throw new Error(`Unsupported Patch packet version: ${version}.`);
-    }
-    const operations = OperationDecoder.operations(reader.readBytes(reader.readUInt32()));
-    const publicKeyHex = Hex.fromBytes(reader.readBytes(this.publicKeyBytes));
-    const hash = Hex.fromBytes(reader.readBytes(this.hashBytes));
-    const signatureHex = Hex.fromBytes(reader.readBytes(this.signatureBytes));
-    if (!reader.isAtEnd) {
-      throw new Error(`Patch packet has ${reader.remainingByteCount} trailing byte(s).`);
-    }
-    return Patch.fromEncoded(operations, publicKeyHex, hash, signatureHex);
+    const document = cborArray(decodeCbor(bytes), "Patch", 5);
+    const version = cborUnsigned(document[0], "Patch version");
+    if (version !== PACKET_VERSION) throw new Error(`Unsupported Patch packet version: ${version}.`);
+    return Patch.fromEncoded(
+      OperationDecoder.values(cborArray(document[1], "Patch operations")),
+      Hex.fromBytes(cborBytes(document[2], "Patch public key", this.publicKeyBytes)),
+      Hex.fromBytes(cborBytes(document[3], "Patch hash", this.hashBytes)),
+      Hex.fromBytes(cborBytes(document[4], "Patch signature", this.signatureBytes)),
+    );
   }
 }

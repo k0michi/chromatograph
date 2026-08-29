@@ -16,7 +16,12 @@ struct PatchPacketCodecTests {
         let encoded = try PatchPacketCodec.encode(patch)
 
         #expect(try PatchPacketCodec.decode(encoded) == patch)
-        #expect(encoded.prefix(8) == Data([0, 0, 0, 0, 0, 0, 0, 24]))
+        let expectedHex =
+            "8500818402072280" +
+            "5820" + String(repeating: "ab", count: 32) +
+            "5820" + String(repeating: "cd", count: 32) +
+            "5840" + String(repeating: "ef", count: 64)
+        #expect(encoded.hexStringForTest == expectedHex)
     }
 
     @Test
@@ -47,5 +52,11 @@ struct PatchPacketCodecTests {
         #expect(throws: PatchPacketCodecError.trailingBytes(1)) {
             try PatchPacketCodec.decode(encoded + Data([0]))
         }
+    }
+}
+
+private extension Data {
+    var hexStringForTest: String {
+        map { String(format: "%02x", $0) }.joined()
     }
 }

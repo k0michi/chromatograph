@@ -1,198 +1,191 @@
+import CBOR
 import Foundation
 
 enum OperationPacketCodecError: Error, Equatable {
-    case invalidFormatVersion(UInt32)
-    case invalidOperationType(UInt32)
-    case invalidCompositeOp(UInt32)
-    case invalidBlendMode(UInt32)
+    case invalidFormat
+    case invalidFormatVersion(UInt64)
+    case invalidOperationType(UInt64)
+    case invalidCompositeOp(UInt64)
+    case invalidBlendMode(UInt64)
     case invalidParentHash(String)
-    case tooManyElements
     case truncatedPacket
     case trailingBytes(Int)
 }
 
 enum OperationPacketCodec {
-    private static let blendOperation: UInt32 = 1
-    private static let undoOperation: UInt32 = 2
-    private static let sha256ByteCount = 32
+    private static let blendType: UInt64 = 1
+    private static let undoType: UInt64 = 2
 
     static func encode(_ operations: [Operation]) throws -> Data {
-        guard let operationCount = UInt32(exactly: operations.count) else {
-            throw OperationPacketCodecError.tooManyElements
-        }
-
-        var writer = PacketWriter()
-        writer.append(packetVersion)
-        writer.append(operationCount)
-
-        for operation in operations {
-            switch operation {
-            case .blend(let operation):
-                writer.append(blendOperation)
-                try encodeCommon(operation.chunk, parents: operation.parents, into: &writer)
-                writer.append(operation.compositeOp.rawValue)
-                writer.append(operation.blendMode.rawValue)
-                writer.append(operation.opacity.bitPattern)
-                guard let imageByteCount = UInt32(exactly: operation.imageBytes.count) else {
-                    throw OperationPacketCodecError.tooManyElements
-                }
-                writer.append(imageByteCount)
-                writer.append(operation.imageBytes)
-
-            case .undo(let operation):
-                writer.append(undoOperation)
-                try encodeCommon(operation.chunk, parents: operation.parents, into: &writer)
-            }
-        }
-
-        return writer.data
+        try CBOREncoder().encode(.array([
+            .unsignedInteger(UInt64(packetVersion)),
+            .array(try values(operations)),
+        ]))
     }
 
     static func decode(_ data: Data) throws -> [Operation] {
-        var reader = PacketReader(data: data)
-        let version = try reader.readUInt32()
-        guard version == packetVersion else {
-            throw OperationPacketCodecError.invalidFormatVersion(version)
+        let root: CBORValue
+        do {
+            root = try CBORDecoder().decode(data)
+        } catch CBORDecodingError.truncated {
+            throw OperationPacketCodecError.truncatedPacket
+        } catch CBORDecodingError.trailingBytes(let offset) {
+            throw OperationPacketCodecError.trailingBytes(data.count - offset)
+        } catch {
+            throw OperationPacketCodecError.invalidFormat
         }
 
-        let operationCount = try reader.readCount()
-        var operations: [Operation] = []
-        operations.reserveCapacity(operationCount)
+        guard case .array(let document) = root, document.count == 2,
+              case .unsignedInteger(let version) = document[0]
+        else { throw OperationPacketCodecError.invalidFormat }
+        guard version == UInt64(packetVersion) else {
+            throw OperationPacketCodecError.invalidFormatVersion(version)
+        }
+        guard case .array(let encodedOperations) = document[1] else {
+            throw OperationPacketCodecError.invalidFormat
+        }
+        return try decodeValues(encodedOperations)
+    }
 
-        for _ in 0..<operationCount {
-            let type = try reader.readUInt32()
-            let chunk = TileChunk(
-                x: Int32(bitPattern: try reader.readUInt32()),
-                y: Int32(bitPattern: try reader.readUInt32())
-            )
-            let parents = try decodeParents(from: &reader)
+    static func values(_ operations: [Operation]) throws -> [CBORValue] {
+        try operations.map { operation in
+            switch operation {
+            case .blend(let blend):
+                return .array([
+                    .unsignedInteger(blendType),
+                    integer(blend.chunk.x),
+                    integer(blend.chunk.y),
+                    .array(try parents(blend.parents)),
+                    .unsignedInteger(UInt64(blend.compositeOp.rawValue)),
+                    .unsignedInteger(UInt64(blend.blendMode.rawValue)),
+                    .unsignedInteger(UInt64(blend.opacity.bitPattern)),
+                    .byteString(blend.imageBytes),
+                ])
+            case .undo(let undo):
+                return .array([
+                    .unsignedInteger(undoType),
+                    integer(undo.chunk.x),
+                    integer(undo.chunk.y),
+                    .array(try parents(undo.parents)),
+                ])
+            }
+        }
+    }
+
+    static func decodeValues(_ values: [CBORValue]) throws -> [Operation] {
+        try values.map { encoded in
+            guard case .array(let fields) = encoded,
+                  let type = fields.first?.unsignedInteger
+            else { throw OperationPacketCodecError.invalidFormat }
 
             switch type {
-            case blendOperation:
-                let compositeRaw = try reader.readUInt32()
-                guard let compositeOp = CompositeOp(rawValue: compositeRaw) else {
-                    throw OperationPacketCodecError.invalidCompositeOp(compositeRaw)
+            case blendType:
+                guard fields.count == 8,
+                      let x = fields[1].int32,
+                      let y = fields[2].int32,
+                      let parents = try? decodeParents(fields[3]),
+                      let compositeRaw = fields[4].unsignedInteger,
+                      compositeRaw <= UInt64(UInt32.max),
+                      let composite = CompositeOp(rawValue: UInt32(compositeRaw)),
+                      let blendRaw = fields[5].unsignedInteger,
+                      blendRaw <= UInt64(UInt32.max),
+                      let blendMode = BlendMode(rawValue: UInt32(blendRaw)),
+                      let opacityBits = fields[6].unsignedInteger,
+                      opacityBits <= UInt64(UInt32.max),
+                      case .byteString(let imageBytes) = fields[7]
+                else {
+                    if fields.count == 8, let raw = fields[4].unsignedInteger,
+                       (raw > UInt64(UInt32.max) || CompositeOp(rawValue: UInt32(raw)) == nil) {
+                        throw OperationPacketCodecError.invalidCompositeOp(raw)
+                    }
+                    if fields.count == 8, let raw = fields[5].unsignedInteger,
+                       (raw > UInt64(UInt32.max) || BlendMode(rawValue: UInt32(raw)) == nil) {
+                        throw OperationPacketCodecError.invalidBlendMode(raw)
+                    }
+                    throw OperationPacketCodecError.invalidFormat
                 }
-                let blendRaw = try reader.readUInt32()
-                guard let blendMode = BlendMode(rawValue: blendRaw) else {
-                    throw OperationPacketCodecError.invalidBlendMode(blendRaw)
-                }
-                let opacity = Float(bitPattern: try reader.readUInt32())
-                let imageByteCount = try reader.readCount()
-                let imageBytes = try reader.readData(count: imageByteCount)
-                operations.append(
-                    .blend(
-                        BlendOperation(
-                            chunk: chunk,
-                            parents: parents,
-                            compositeOp: compositeOp,
-                            blendMode: blendMode,
-                            opacity: opacity,
-                            imageBytes: imageBytes
-                        )))
-
-            case undoOperation:
-                operations.append(.undo(UndoOperation(chunk: chunk, parents: parents)))
-
+                return .blend(BlendOperation(
+                    chunk: TileChunk(x: x, y: y),
+                    parents: parents,
+                    compositeOp: composite,
+                    blendMode: blendMode,
+                    opacity: Float(bitPattern: UInt32(opacityBits)),
+                    imageBytes: imageBytes
+                ))
+            case undoType:
+                guard fields.count == 4,
+                      let x = fields[1].int32,
+                      let y = fields[2].int32
+                else { throw OperationPacketCodecError.invalidFormat }
+                return .undo(UndoOperation(
+                    chunk: TileChunk(x: x, y: y),
+                    parents: try decodeParents(fields[3])
+                ))
             default:
                 throw OperationPacketCodecError.invalidOperationType(type)
             }
         }
-
-        guard reader.remainingByteCount == 0 else {
-            throw OperationPacketCodecError.trailingBytes(reader.remainingByteCount)
-        }
-        return operations
     }
 
-    private static func encodeCommon(
-        _ chunk: TileChunk,
-        parents: [String],
-        into writer: inout PacketWriter
-    ) throws {
-        writer.append(UInt32(bitPattern: chunk.x))
-        writer.append(UInt32(bitPattern: chunk.y))
-        guard let parentCount = UInt32(exactly: parents.count) else {
-            throw OperationPacketCodecError.tooManyElements
-        }
-        writer.append(parentCount)
-        for parent in parents {
-            guard let bytes = Data(hexString: parent), bytes.count == sha256ByteCount else {
-                throw OperationPacketCodecError.invalidParentHash(parent)
+    private static func integer(_ value: Int32) -> CBORValue {
+        value >= 0
+            ? .unsignedInteger(UInt64(value))
+            : .negativeInteger(UInt64(-1 - Int64(value)))
+    }
+
+    private static func parents(_ hashes: [String]) throws -> [CBORValue] {
+        try hashes.map { hash in
+            guard let data = Data(cborHex: hash), data.count == 32 else {
+                throw OperationPacketCodecError.invalidParentHash(hash)
             }
-            writer.append(bytes)
+            return .byteString(data)
         }
     }
 
-    private static func decodeParents(from reader: inout PacketReader) throws -> [String] {
-        let parentCount = try reader.readCount()
-        var parents: [String] = []
-        parents.reserveCapacity(parentCount)
-        for _ in 0..<parentCount {
-            parents.append(try reader.readData(count: sha256ByteCount).hexString)
+    private static func decodeParents(_ value: CBORValue) throws -> [String] {
+        guard case .array(let values) = value else {
+            throw OperationPacketCodecError.invalidFormat
         }
-        return parents
+        return try values.map {
+            guard case .byteString(let data) = $0, data.count == 32 else {
+                throw OperationPacketCodecError.invalidFormat
+            }
+            return data.cborHex
+        }
     }
 }
 
-private struct PacketWriter {
-    var data = Data()
-
-    mutating func append(_ value: UInt32) {
-        var bigEndian = value.bigEndian
-        withUnsafeBytes(of: &bigEndian) { data.append(contentsOf: $0) }
+extension CBORValue {
+    fileprivate var unsignedInteger: UInt64? {
+        guard case .unsignedInteger(let value) = self else { return nil }
+        return value
     }
 
-    mutating func append(_ bytes: Data) {
-        data.append(bytes)
-    }
-}
-
-private struct PacketReader {
-    let data: Data
-    private(set) var offset = 0
-
-    var remainingByteCount: Int { data.count - offset }
-
-    mutating func readUInt32() throws -> UInt32 {
-        let bytes = try readData(count: MemoryLayout<UInt32>.size)
-        return bytes.reduce(0) { ($0 << 8) | UInt32($1) }
-    }
-
-    mutating func readCount() throws -> Int {
-        let value = try readUInt32()
-        guard let count = Int(exactly: value) else {
-            throw OperationPacketCodecError.tooManyElements
+    fileprivate var int32: Int32? {
+        switch self {
+        case .unsignedInteger(let value) where value <= UInt64(Int32.max):
+            return Int32(value)
+        case .negativeInteger(let argument) where argument <= UInt64(Int32.max):
+            return Int32(-1 - Int64(argument))
+        default:
+            return nil
         }
-        return count
-    }
-
-    mutating func readData(count: Int) throws -> Data {
-        guard count >= 0, count <= remainingByteCount else {
-            throw OperationPacketCodecError.truncatedPacket
-        }
-        let start = offset
-        offset += count
-        return data.subdata(in: start..<offset)
     }
 }
 
 extension Data {
-    fileprivate init?(hexString: String) {
-        guard hexString.count.isMultiple(of: 2) else { return nil }
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(hexString.count / 2)
-        var index = hexString.startIndex
-        while index < hexString.endIndex {
-            let next = hexString.index(index, offsetBy: 2)
-            guard let byte = UInt8(hexString[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
+    init?(cborHex string: String) {
+        guard string.count.isMultiple(of: 2) else { return nil }
+        var result = Data(capacity: string.count / 2)
+        var index = string.startIndex
+        while index < string.endIndex {
+            let end = string.index(index, offsetBy: 2)
+            guard let byte = UInt8(string[index..<end], radix: 16) else { return nil }
+            result.append(byte)
+            index = end
         }
-        self.init(bytes)
+        self = result
     }
 
-    fileprivate var hexString: String {
-        map { String(format: "%02x", $0) }.joined()
-    }
+    var cborHex: String { map { String(format: "%02x", $0) }.joined() }
 }

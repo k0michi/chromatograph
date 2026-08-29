@@ -32,10 +32,18 @@ describe("OperationDecoder", () => {
     expect(OperationDecoder.operations(OperationEncoder.operations(operations))).toEqual(operations);
   });
 
+  it("matches the Swift CBOR fixture", () => {
+    expect(toHex(OperationEncoder.operations(operations))).toBe(
+      "82008288010c24815820" + "ab".repeat(32) +
+      "01011a3f00000044000102ff" +
+      "8402200280",
+    );
+  });
+
   it("rejects truncated and trailing packets", () => {
     const packet = OperationEncoder.operations([]);
-    expect(() => OperationDecoder.operations(packet.slice(0, -1))).toThrow("Unexpected end of binary data");
-    expect(() => OperationDecoder.operations(new Uint8Array([...packet, 0]))).toThrow("trailing byte");
+    expect(() => OperationDecoder.operations(packet.slice(0, -1))).toThrow("CBOR decode error");
+    expect(() => OperationDecoder.operations(new Uint8Array([...packet, 0]))).toThrow("CBOR decode error");
   });
 });
 
@@ -241,10 +249,14 @@ describe("Patch packet codec", () => {
 
   it("rejects truncated and trailing Patch packets", () => {
     const packet = PatchEncoder.encode(patch);
-    expect(() => PatchDecoder.decode(packet.slice(0, -1))).toThrow("Unexpected end of binary data");
-    expect(() => PatchDecoder.decode(new Uint8Array([...packet, 0]))).toThrow("trailing byte");
+    expect(() => PatchDecoder.decode(packet.slice(0, -1))).toThrow("CBOR decode error");
+    expect(() => PatchDecoder.decode(new Uint8Array([...packet, 0]))).toThrow("CBOR decode error");
   });
 });
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 class MockWebSocket {
   binaryType: BinaryType = "blob";

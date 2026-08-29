@@ -19,6 +19,7 @@ WORKDIR /build
 # files do not change.
 COPY ./Package.* ./
 COPY ./swift-libpng ./swift-libpng
+COPY ./swift-cbor ./swift-cbor
 RUN swift package resolve
 
 # Copy entire repo into container

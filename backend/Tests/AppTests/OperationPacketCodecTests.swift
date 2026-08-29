@@ -22,10 +22,9 @@ struct OperationPacketCodecTests {
 
         let encoded = try OperationPacketCodec.encode(operations)
         let expectedHex =
-            "0000000000000002" +
-            "000000010000000cfffffffb00000001" + parent +
-            "00000001000000013f00000000000004000102ff" +
-            "00000002ffffffff0000000200000000"
+            "82008288010c24815820" + parent +
+            "01011a3f00000044000102ff" +
+            "8402200280"
 
         #expect(encoded.hexStringForTest == expectedHex)
         #expect(try OperationPacketCodec.decode(encoded) == operations)
@@ -34,7 +33,7 @@ struct OperationPacketCodecTests {
     @Test
     func roundTripsEmptyPacket() throws {
         let encoded = try OperationPacketCodec.encode([])
-        #expect(encoded == Data([0, 0, 0, 0, 0, 0, 0, 0]))
+        #expect(encoded == Data([0x82, 0x00, 0x80]))
         #expect(try OperationPacketCodec.decode(encoded).isEmpty)
     }
 
