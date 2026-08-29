@@ -32,7 +32,7 @@ export function KeySettings({ open, onClose }: { readonly open: boolean; readonl
           borderBottom: "1px solid var(--panel-border)" }}>
           <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>Signing keys</h1>
-            <p style={{ margin: "5px 0 0", color: "var(--text-muted)", fontSize: 12 }}>Choose the identity used to sign new paint operations.</p>
+            <p style={{ margin: "5px 0 0", color: "var(--text-muted)", fontSize: 12 }}>Choose the identity used to sign patches.</p>
           </div>
           <button type="button" aria-label="Close settings" onClick={onClose} style={{ ...buttonStyle, padding: 7, display: "grid", placeItems: "center" }}><CloseIcon /></button>
         </header>
