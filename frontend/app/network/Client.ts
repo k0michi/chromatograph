@@ -166,16 +166,24 @@ export class Client implements Disposable {
   private async requestSnapshots(
     chunks: readonly ChunkCoordinate[],
   ): Promise<ReadonlyMap<string, ChunkSnapshotPacket>> {
-    const url = this.url("/api/snapshots", "http");
-    const request = this.options.fetch ?? ((input: URL, init?: RequestInit) => fetch(input, init));
-    const response = await request(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chunks }),
-    });
-    if (!response.ok) throw new Error(`Snapshot fetch failed (${response.status}).`);
-    return new Map(SnapshotPacketDecoder.decode(await response.arrayBuffer()).map((snapshot) =>
-      [this.chunkKey(snapshot.chunk), snapshot]));
+    try {
+      const url = this.url("/api/snapshots", "http");
+      const request = this.options.fetch ?? ((input: URL, init?: RequestInit) => fetch(input, init));
+      const response = await request(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunks }),
+      });
+      if (!response.ok) throw new Error(`Snapshot fetch failed (${response.status}).`);
+      return new Map(SnapshotPacketDecoder.decode(await response.arrayBuffer()).map((snapshot) =>
+        [this.chunkKey(snapshot.chunk), snapshot]));
+    } catch {
+      // A snapshot is only a cache of the tile state. While offline (or when the
+      // cache cannot be decoded), treat every requested tile as the empty root.
+      // Locally created patches are persisted separately in the outbox and will
+      // be submitted when the WebSocket reconnects.
+      return new Map();
+    }
   }
 
   subscribeSnapshots(listener: SnapshotListener): () => void {

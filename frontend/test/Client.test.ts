@@ -247,6 +247,37 @@ describe("Client", () => {
       [{ chunk: { x: 12, y: -5 }, headPatchHash: patch.hash, imageBytes }],
     ]);
   });
+
+  it("treats a failed snapshot request as empty tiles", async () => {
+    const request = vi.fn(async () => {
+      throw new TypeError("Network unavailable");
+    });
+    const client = new Client("https://example.test", { fetch: request });
+
+    await expect(client.fetchSnapshots([{ x: 12, y: -5 }])).resolves.toEqual([]);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("queues a patch after an offline snapshot fallback and sends it on connect", async () => {
+    const outbox = new MemoryPatchOutbox();
+    const socket = new MockWebSocket();
+    const client = new Client("https://example.test", {
+      createWebSocket: () => socket as unknown as WebSocket,
+      fetch: async () => { throw new TypeError("Network unavailable"); },
+      patchOutbox: outbox,
+    });
+
+    await expect(client.fetchSnapshots([{ x: 12, y: -5 }])).resolves.toEqual([]);
+    await client.send(patch);
+    expect(await outbox.entries()).toHaveLength(1);
+    expect(socket.sent).toHaveLength(0);
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+    await vi.waitFor(() => expect(socket.sent).toEqual([PatchEncoder.encode(patch)]));
+    client.close();
+  });
 });
 
 describe("Patch packet codec", () => {
