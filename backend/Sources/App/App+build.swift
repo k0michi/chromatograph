@@ -37,18 +37,13 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
     logger.logLevel = reader.string(forKey: "log.level", as: Logger.Level.self, default: .info)
     return logger
   }()
-  let metadataPath = reader.string(forKey: "storage.path", default: "")
-  let snapshotPath = reader.string(forKey: "storage.snapshotPath", default: "")
+  let storagePath = reader.string(forKey: "storage.path", default: "")
   let store: any ChunkStore
-  if metadataPath.isEmpty && snapshotPath.isEmpty {
+  if storagePath.isEmpty {
     store = MemoryChunkStore()
   } else {
-    guard !metadataPath.isEmpty, !snapshotPath.isEmpty else {
-      throw StorageConfigurationError.incompletePaths
-    }
     store = try FileSystemChunkStore(
-      metadataDirectory: URL(filePath: metadataPath, directoryHint: .isDirectory),
-      snapshotDirectory: URL(filePath: snapshotPath, directoryHint: .isDirectory)
+      storageDirectory: URL(filePath: storagePath, directoryHint: .isDirectory)
     )
   }
   let broadcaster = PatchBroadcaster(store: store)
@@ -64,10 +59,6 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
     logger: logger
   )
   return app
-}
-
-private enum StorageConfigurationError: Error {
-  case incompletePaths
 }
 
 /// Build router

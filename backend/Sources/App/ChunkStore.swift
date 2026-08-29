@@ -29,14 +29,20 @@ struct StoredChunkState: Sendable {
   let patches: [PatchSummary]
 }
 
+/// A disposable raster cache keyed by the complete event set for one chunk.
+struct CachedChunkSnapshot: Sendable {
+  let snapshot: ChunkSnapshot
+  let stateHash: String
+}
+
 protocol ChunkStore: Sendable {
   func load() throws -> StoredChunkState
   /// Returns the full patch (including operation images) by hash, or `nil` when
   /// the store has no such patch.
   func patch(hash: String) throws -> Patch?
-  func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data?
-  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws
-  func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws
+  func snapshot(x: Int32, y: Int32, stateHash: String) throws -> Data?
+  func storeSnapshots(_ snapshots: [CachedChunkSnapshot]) throws
+  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws
 }
 
 /// Keeps everything in memory. Used when no storage paths are configured; it has
@@ -50,10 +56,10 @@ final class MemoryChunkStore: ChunkStore, @unchecked Sendable {
   }
 
   func patch(hash: String) throws -> Patch? { patches[hash] }
-  func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data? { nil }
-  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws {}
+  func snapshot(x: Int32, y: Int32, stateHash: String) throws -> Data? { nil }
+  func storeSnapshots(_ snapshots: [CachedChunkSnapshot]) throws {}
 
-  func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws {
+  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws {
     if patches[patch.hash] == nil { order.append(patch.hash) }
     patches[patch.hash] = patch
   }
@@ -65,9 +71,9 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
   private let patchesDirectory: URL
   private let fileManager = FileManager.default
 
-  init(metadataDirectory: URL, snapshotDirectory: URL) throws {
-    self.snapshotDirectory = snapshotDirectory
-    patchesDirectory = metadataDirectory.appending(path: "patches", directoryHint: .isDirectory)
+  init(storageDirectory: URL) throws {
+    patchesDirectory = storageDirectory.appending(path: "patches", directoryHint: .isDirectory)
+    snapshotDirectory = storageDirectory.appending(path: "snapshots", directoryHint: .isDirectory)
     try fileManager.createDirectory(at: patchesDirectory, withIntermediateDirectories: true)
     try fileManager.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
   }
@@ -91,30 +97,34 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
     return try PatchPacketCodec.decode(Data(contentsOf: url))
   }
 
-  func snapshot(x: Int32, y: Int32, headPatchHash: String) throws -> Data? {
-    let url = snapshotURL(x: x, y: y, headPatchHash: headPatchHash)
+  func snapshot(x: Int32, y: Int32, stateHash: String) throws -> Data? {
+    let url = snapshotURL(x: x, y: y, stateHash: stateHash)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
     return try Data(contentsOf: url, options: .mappedIfSafe)
   }
 
-  func storeSnapshots(_ snapshots: [ChunkSnapshot]) throws {
-    for snapshot in snapshots {
+  func storeSnapshots(_ snapshots: [CachedChunkSnapshot]) throws {
+    for cached in snapshots {
+      let snapshot = cached.snapshot
       let directory = snapshotDirectory
         .appending(path: String(snapshot.chunk.x), directoryHint: .isDirectory)
         .appending(path: String(snapshot.chunk.y), directoryHint: .isDirectory)
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
       try snapshot.imageBytes.write(
-        to: snapshotURL(
-          x: snapshot.chunk.x,
-          y: snapshot.chunk.y,
-          headPatchHash: snapshot.headPatchHash
-        ),
+        to: snapshotURL(x: snapshot.chunk.x, y: snapshot.chunk.y, stateHash: cached.stateHash),
         options: .atomic
       )
+      let currentFileName = "\(cached.stateHash).png"
+      for url in try fileManager.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+      ) where url.pathExtension == "png" && url.lastPathComponent != currentFileName {
+        try fileManager.removeItem(at: url)
+      }
     }
   }
 
-  func commit(patch: Patch, snapshots: [ChunkSnapshot]) throws {
+  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws {
     // Snapshot files are written first. The atomic Patch write is the commit point;
     // snapshots left by an interrupted write are harmless cache entries.
     try storeSnapshots(snapshots)
@@ -124,10 +134,10 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
     )
   }
 
-  private func snapshotURL(x: Int32, y: Int32, headPatchHash: String) -> URL {
+  private func snapshotURL(x: Int32, y: Int32, stateHash: String) -> URL {
     snapshotDirectory
       .appending(path: String(x), directoryHint: .isDirectory)
       .appending(path: String(y), directoryHint: .isDirectory)
-      .appending(path: "\(headPatchHash).png")
+      .appending(path: "\(stateHash).png")
   }
 }

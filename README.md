@@ -21,7 +21,7 @@ docker compose up --build -d
 
 Open [http://localhost](http://localhost) in a browser. Nginx serves the frontend on port 80 and proxies API and WebSocket traffic to the backend.
 
-Canvas data and snapshots are stored in the `backend-data` and `backend-snapshots` Docker volumes. To stop the application without deleting its data:
+Canvas data is stored in the `backend-data` Docker volume. Patch files are kept under `patches/`, and the latest snapshot for each tile is cached under `snapshots/`. To stop the application without deleting its data:
 
 ```sh
 docker compose down

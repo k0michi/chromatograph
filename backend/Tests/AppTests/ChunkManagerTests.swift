@@ -216,48 +216,71 @@ struct ChunkManagerTests {
   }
 
   @Test
-  func fileSystemStoreRestoresPatchesAndSnapshotsFromSeparateDirectories() async throws {
+  func fileSystemStoreRestoresPatchesAndKeepsOnlyLatestSnapshot() async throws {
     let root = FileManager.default.temporaryDirectory.appending(
       path: "chromatograph-store-\(UUID().uuidString)",
       directoryHint: .isDirectory
     )
     defer { try? FileManager.default.removeItem(at: root) }
-    let metadata = root.appending(path: "metadata", directoryHint: .isDirectory)
-    let snapshotCache = root.appending(path: "snapshots", directoryHint: .isDirectory)
-    let store = try FileSystemChunkStore(
-      metadataDirectory: metadata,
-      snapshotDirectory: snapshotCache
-    )
+    let store = try FileSystemChunkStore(storageDirectory: root)
     let storedPatch = try canonicalPatch(operations: [.blend(try blendOperation(color: .init(255, 0, 0, 255)))])
     let patchHash = storedPatch.hash
     let firstManager = ChunkManager(store: store)
     try await firstManager.apply(storedPatch)
 
-    let restoredManager = ChunkManager(store: try FileSystemChunkStore(
-      metadataDirectory: metadata,
-      snapshotDirectory: snapshotCache
-    ))
+    let restoredManager = ChunkManager(store: try FileSystemChunkStore(storageDirectory: root))
     let restored = try await restoredManager.latestSnapshots(for: [.init(x: 0, y: 0)])
     #expect(restored.count == 1)
     #expect(restored[0].headPatchHash == patchHash)
     #expect(try PNGCodec.decode(restored[0].imageBytes).rgba.prefix(4) == [255, 0, 0, 255])
-    let patchFile = metadata.appending(path: "patches/\(patchHash).patch")
-    let snapshotFile = snapshotCache.appending(path: "0/0/\(patchHash).png")
+    let patchFile = root.appending(path: "patches/\(patchHash).patch")
+    let snapshotDirectory = root.appending(path: "snapshots/0/0", directoryHint: .isDirectory)
+    let firstSnapshotFiles = try FileManager.default.contentsOfDirectory(
+      at: snapshotDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "png" }
     #expect(FileManager.default.fileExists(atPath: patchFile.path))
-    #expect(FileManager.default.fileExists(atPath: snapshotFile.path))
+    #expect(firstSnapshotFiles.count == 1)
+    #expect(firstSnapshotFiles[0].lastPathComponent == "\(stateHash([patchHash])).png")
 
-    try FileManager.default.removeItem(at: snapshotFile)
-    let managerWithoutCache = ChunkManager(store: try FileSystemChunkStore(
-      metadataDirectory: metadata,
-      snapshotDirectory: snapshotCache
-    ))
+    let blue = try blendOperation(color: .init(0, 0, 255, 255))
+    let secondPatch = try canonicalPatch(operations: [.blend(.init(
+      chunk: blue.chunk,
+      parent: patchHash,
+      compositeOp: blue.compositeOp,
+      blendMode: blue.blendMode,
+      opacity: blue.opacity,
+      payloadHash: blue.payloadHash
+    ))])
+    try await firstManager.apply(secondPatch)
+    let latestSnapshotFiles = try FileManager.default.contentsOfDirectory(
+      at: snapshotDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "png" }
+    #expect(latestSnapshotFiles.count == 1)
+    #expect(latestSnapshotFiles[0].lastPathComponent == "\(stateHash([patchHash, secondPatch.hash])).png")
+
+    try FileManager.default.removeItem(at: latestSnapshotFiles[0])
+    let managerWithoutCache = ChunkManager(store: try FileSystemChunkStore(storageDirectory: root))
     let recomputed = try await managerWithoutCache.latestSnapshots(for: [.init(x: 0, y: 0)])
-    #expect(try PNGCodec.decode(recomputed[0].imageBytes).rgba.prefix(4) == [255, 0, 0, 255])
-    #expect(FileManager.default.fileExists(atPath: snapshotFile.path))
+    #expect(try PNGCodec.decode(recomputed[0].imageBytes).rgba.prefix(4) == [0, 0, 255, 255])
+    let recomputedFiles = try FileManager.default.contentsOfDirectory(
+      at: snapshotDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "png" }
+    #expect(recomputedFiles.count == 1)
   }
 }
 
 private func hash(_ byte: String) -> String { String(repeating: byte, count: 32) }
+
+private func stateHash(_ eventHashes: [String]) -> String {
+  var events = Data()
+  for hash in eventHashes.compactMap(Data.init(cborHex:)).sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+    events.append(hash)
+  }
+  return Data(SHA256.hash(data: events)).cborHex
+}
 
 private func pngChunkTypes(_ png: Data) -> [String] {
   let bytes = [UInt8](png)

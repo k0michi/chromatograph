@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 enum ChunkManagerError: Error, Equatable {
@@ -78,29 +79,32 @@ actor ChunkManager {
     for key in touched {
       candidateSnapshots[key] = try render(candidateEntries[key] ?? [])
     }
-    let encodedSnapshots = try touched.sorted().map { key in
+    let cachedSnapshots = try touched.sorted().map { key in
       let head = try linearize(candidateEntries[key] ?? []).last?.patchHash ?? patch.hash
-      return ChunkSnapshot(
-        chunk: TileChunk(x: key.x, y: key.y),
-        headPatchHash: head,
-        imageBytes: try PNGCodec.encodeRGBA8(
-          candidateSnapshots[key]!,
-          width: Self.tileSize,
-          height: Self.tileSize
-        )
+      return CachedChunkSnapshot(
+        snapshot: ChunkSnapshot(
+          chunk: TileChunk(x: key.x, y: key.y),
+          headPatchHash: head,
+          imageBytes: try PNGCodec.encodeRGBA8(
+            candidateSnapshots[key]!,
+            width: Self.tileSize,
+            height: Self.tileSize
+          )
+        ),
+        stateHash: try stateHash(candidateEntries[key] ?? [])
       )
     }
-    try store.commit(patch: patch, snapshots: encodedSnapshots)
+    try store.commit(patch: patch, snapshots: cachedSnapshots)
     entriesByChunk = candidateEntries
     for (key, snapshot) in candidateSnapshots {
       snapshotCache.set(key, snapshot)
     }
-    for snapshot in encodedSnapshots {
+    for snapshot in cachedSnapshots.map(\.snapshot) {
       headPatchHashes[TileChunkKey(snapshot.chunk)] = snapshot.headPatchHash
     }
     committedHashes.insert(patch.hash)
     chunksByPatchHash[patch.hash] = touched
-    return encodedSnapshots
+    return cachedSnapshots.map(\.snapshot)
   }
 
   func snapshot(x: Int32, y: Int32) throws -> [UInt8]? {
@@ -114,8 +118,7 @@ actor ChunkManager {
   private func rasterizedSnapshot(for key: TileChunkKey) throws -> [UInt8]? {
     if let cached = snapshotCache.get(key) { return cached }
     guard let entries = entriesByChunk[key], !entries.isEmpty else { return nil }
-    if let head = headPatchHashes[key],
-      let png = try store.snapshot(x: key.x, y: key.y, headPatchHash: head)
+    if let png = try store.snapshot(x: key.x, y: key.y, stateHash: try stateHash(entries))
     {
       let rgba = try PNGCodec.decode(png).rgba
       snapshotCache.set(key, rgba)
@@ -178,10 +181,11 @@ actor ChunkManager {
   func latestSnapshots(for chunks: [TileChunk]) throws -> [ChunkSnapshot] {
     try loadIfNeeded()
     var result: [ChunkSnapshot] = []
-    var generated: [ChunkSnapshot] = []
+    var generated: [CachedChunkSnapshot] = []
     for key in Set(chunks.map(TileChunkKey.init)).sorted() {
       guard let head = headPatchHashes[key] else { continue }
-      if let cached = try store.snapshot(x: key.x, y: key.y, headPatchHash: head) {
+      let hash = try stateHash(entriesByChunk[key] ?? [])
+      if let cached = try store.snapshot(x: key.x, y: key.y, stateHash: hash) {
         result.append(ChunkSnapshot(
           chunk: .init(x: key.x, y: key.y),
           headPatchHash: head,
@@ -196,7 +200,7 @@ actor ChunkManager {
         imageBytes: try PNGCodec.encodeRGBA8(rgba, width: Self.tileSize, height: Self.tileSize)
       )
       result.append(snapshot)
-      generated.append(snapshot)
+      generated.append(CachedChunkSnapshot(snapshot: snapshot, stateHash: hash))
     }
     if !generated.isEmpty { try store.storeSnapshots(generated) }
     return result
@@ -298,6 +302,21 @@ actor ChunkManager {
       }
     }
     return result
+  }
+
+  /// Patch validation guarantees at most one operation per chunk in a patch,
+  /// so its patch hash is the SHA-256 identity of that chunk event. Sorting the
+  /// raw event hashes makes this digest independent of delivery and load order.
+  private func stateHash(_ entries: [Entry]) throws -> String {
+    let eventHashes = try entries.map { entry -> Data in
+      guard let hash = Data(cborHex: entry.patchHash), hash.count == 32 else {
+        throw ChunkManagerError.missingPatchPayload(entry.patchHash)
+      }
+      return hash
+    }.sorted { $0.lexicographicallyPrecedes($1) }
+    var events = Data(capacity: eventHashes.count * 32)
+    for hash in eventHashes { events.append(hash) }
+    return Data(SHA256.hash(data: events)).cborHex
   }
 
   private func render(_ entries: [Entry]) throws -> [UInt8] {
