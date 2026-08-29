@@ -16,6 +16,7 @@ describe("ToolRegistry", () => {
   it("resolves tool shortcuts from the registry", () => {
     expect(toolForKey("B")).toBe("brush");
     expect(toolForKey("e")).toBe("eraser");
+    expect(toolForKey("i")).toBe("eyedropper");
     expect(toolForKey("v")).toBe("move");
     expect(toolForKey("x")).toBeNull();
   });

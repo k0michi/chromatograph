@@ -409,6 +409,34 @@ export default function Index() {
         }
       | null = null;
     let isPainting = false;
+    let isSamplingColor = false;
+    let sampleReadInFlight = false;
+    let pendingSample: { x: number; y: number } | null = null;
+
+    const drainColorSamples = async () => {
+      if (sampleReadInFlight) return;
+      sampleReadInFlight = true;
+      try {
+        while (pendingSample) {
+          const sample = pendingSample;
+          pendingSample = null;
+          const rgba = await renderer.readSnapshotRgba(sample.x, sample.y);
+          if (toolRef.current === "eyedropper") setForegroundColor(rgbHex(rgba));
+        }
+      } catch (error) {
+        console.error("Failed to sample canvas color:", error);
+      } finally {
+        sampleReadInFlight = false;
+        if (pendingSample) void drainColorSamples();
+      }
+    };
+
+    const queueColorSample = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const world = renderer.camera.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
+      pendingSample = { x: world.x, y: world.y };
+      void drainColorSamples();
+    };
 
     const restoreCursor = () => {
       canvas.style.cursor = isSpaceHeldRef.current ? "grab" : TOOL_DEFINITIONS[toolRef.current].cursor;
@@ -486,6 +514,11 @@ export default function Index() {
         };
         return;
       }
+      if (activeTool === "eyedropper") {
+        isSamplingColor = true;
+        queueColorSample(event);
+        return;
+      }
       if (activeTool === "brush") {
         void colorStore.remember(foregroundColorRef.current).catch((error: unknown) => {
           console.error("Failed to save used color:", error);
@@ -512,6 +545,10 @@ export default function Index() {
       cursorScreenRef.current = { x: screenX, y: screenY };
       cursorNeedsInspectionRef.current = true;
       renderer.invalidate();
+      if (isSamplingColor) {
+        queueColorSample(event);
+        return;
+      }
       if (panOrigin) {
         const dx = event.clientX - panOrigin.x;
         const dy = event.clientY - panOrigin.y;
@@ -553,6 +590,9 @@ export default function Index() {
       }
     };
     const onPointerUp = (event: PointerEvent) => {
+      if (isSamplingColor && event.type === "pointerup") queueColorSample(event);
+      isSamplingColor = false;
+      if (event.type === "pointercancel") pendingSample = null;
       if (panOrigin) {
         panOrigin = null;
         restoreCursor();
@@ -750,6 +790,8 @@ export default function Index() {
           <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
             Click to zoom in · Alt+click to zoom out · drag horizontally
           </span>
+        ) : activeDefinition.options === "eyedropper" ? (
+          <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>Click the canvas to sample a foreground color</span>
         ) : (
           <>
             <span style={{ ...fieldLabelStyle, flexShrink: 0 }}>
@@ -824,4 +866,8 @@ export default function Index() {
 
     </>
   );
+}
+
+function rgbHex(rgba: readonly [number, number, number, number]): string {
+  return `#${rgba.slice(0, 3).map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
