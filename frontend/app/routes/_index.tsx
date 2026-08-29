@@ -10,10 +10,12 @@ import { CanvasRulers, type CanvasRulersHandle } from "~/canvas/CanvasRulers";
 import { CursorInspectorPanel, type CursorInspection } from "~/canvas/CursorInspectorPanel";
 import { CompositeOp } from "~/canvas/Operation";
 import { Client } from "~/network/Client";
-import { NetworkDebugPanel, type NetworkDebugPanelHandle } from "~/network/NetworkDebugPanel";
+import { NetworkDebugPanel } from "~/network/NetworkDebugPanel";
+import { NetworkDebugStore } from "~/network/NetworkDebugStore";
 import { FrameProfilerPanel, type FrameProfilerPanelHandle } from "~/profiling/FrameProfilerPanel";
 import { MenuBar, type MenuBarMenu } from "~/ui/MenuBar";
 import { PanelWindow } from "~/ui/PanelWindow";
+import { useReader } from "~/store/Store";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -172,7 +174,7 @@ export default function Index() {
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const profilerRef = useRef<FrameProfilerPanelHandle>(null);
   const rulersRef = useRef<CanvasRulersHandle>(null);
-  const networkDebugRef = useRef<NetworkDebugPanelHandle>(null);
+  const networkDebugStore = useReader(NetworkDebugStore);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
 
@@ -302,10 +304,10 @@ export default function Index() {
       onError: (error) => console.error("Patch WebSocket error:", error),
     });
     const unsubscribePacketLogs = client.subscribePacketLogs((entry) => {
-      networkDebugRef.current?.append(entry);
+      networkDebugStore.append(entry);
     });
     const unsubscribeConnectionState = client.subscribeConnectionState((state) => {
-      networkDebugRef.current?.setConnectionState(state);
+      networkDebugStore.setConnectionState(state);
     });
     const renderer = new CanvasRenderer(canvas, client);
     rendererRef.current = renderer;
@@ -797,7 +799,7 @@ export default function Index() {
           <FrameProfilerPanel ref={profilerRef} />
         </PanelWindow>
         <PanelWindow title="Network" defaultCollapsed>
-          <NetworkDebugPanel ref={networkDebugRef} />
+          <NetworkDebugPanel />
         </PanelWindow>
       </aside>
 

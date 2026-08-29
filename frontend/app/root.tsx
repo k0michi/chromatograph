@@ -11,7 +11,11 @@ import "modern-normalize";
 import "./theme.css";
 
 import { registerServiceWorker } from "~/pwa/registerServiceWorker";
+import { NetworkDebugStore } from "~/network/NetworkDebugStore";
+import { StoreProvider } from "~/store/Store";
 import type { Route } from "./+types/root";
+
+const createNetworkDebugStore = () => new NetworkDebugStore();
 
 export const links: Route.LinksFunction = () => [];
 
@@ -40,7 +44,11 @@ export default function App() {
     });
   }, []);
 
-  return <Outlet />;
+  return (
+    <StoreProvider create={createNetworkDebugStore}>
+      <Outlet />
+    </StoreProvider>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

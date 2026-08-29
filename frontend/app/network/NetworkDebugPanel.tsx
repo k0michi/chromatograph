@@ -1,13 +1,9 @@
-import { forwardRef, useImperativeHandle, useState } from "react";
-import type { NetworkPacketLogEntry, WebSocketConnectionState } from "./Client";
+import { useState } from "react";
+import { useWatcher } from "~/store/Store";
+import type { WebSocketConnectionState } from "./Client";
+import { NetworkDebugStore, RETAINED_NETWORK_ENTRY_COUNT } from "./NetworkDebugStore";
 
 const DEFAULT_VISIBLE_COUNT = 50;
-const RETAINED_ENTRY_COUNT = 500;
-
-export interface NetworkDebugPanelHandle {
-  append(entry: NetworkPacketLogEntry): void;
-  setConnectionState(state: WebSocketConnectionState): void;
-}
 
 const CONNECTION_STATE_VIEW: Record<WebSocketConnectionState, { readonly label: string; readonly color: string }> = {
   disconnected: { label: "Disconnected", color: "#f87171" },
@@ -19,20 +15,11 @@ function formatBytes(byteLength: number): string {
   return `${(byteLength / 1024).toFixed(1)} KiB`;
 }
 
-export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function NetworkDebugPanel(_, ref) {
-  const [entries, setEntries] = useState<readonly NetworkPacketLogEntry[]>([]);
+export function NetworkDebugPanel() {
+  const store = useWatcher(NetworkDebugStore);
   const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_COUNT);
-  const [connectionState, setConnectionState] = useState<WebSocketConnectionState>("disconnected");
-
-  useImperativeHandle(ref, () => ({
-    append(entry) {
-      setEntries((current) => [...current, entry].slice(-RETAINED_ENTRY_COUNT));
-    },
-    setConnectionState,
-  }), []);
-
-  const visibleEntries = entries.slice(-visibleCount).reverse();
-  const connectionView = CONNECTION_STATE_VIEW[connectionState];
+  const visibleEntries = store.entries.slice(-visibleCount).reverse();
+  const connectionView = CONNECTION_STATE_VIEW[store.connectionState];
 
   return (
     <div
@@ -60,18 +47,18 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
           <input
             type="number"
             min={1}
-            max={RETAINED_ENTRY_COUNT}
+            max={RETAINED_NETWORK_ENTRY_COUNT}
             value={visibleCount}
             onChange={(event) => {
               const value = Number(event.target.value);
               if (Number.isFinite(value)) {
-                setVisibleCount(Math.min(RETAINED_ENTRY_COUNT, Math.max(1, Math.floor(value))));
+                setVisibleCount(Math.min(RETAINED_NETWORK_ENTRY_COUNT, Math.max(1, Math.floor(value))));
               }
             }}
             style={{ width: 48, font: "inherit" }}
           />
         </label>
-        <button type="button" onClick={() => setEntries([])} style={{ font: "inherit" }}>
+        <button type="button" onClick={() => store.clear()} style={{ font: "inherit" }}>
           Clear
         </button>
       </div>
@@ -106,4 +93,4 @@ export const NetworkDebugPanel = forwardRef<NetworkDebugPanelHandle>(function Ne
       </div>
     </div>
   );
-});
+}
