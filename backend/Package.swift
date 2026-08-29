@@ -16,7 +16,6 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-configuration.git", from: "1.0.0",
             traits: [.defaults, "CommandLineArguments"]),
-        .package(url: "https://github.com/tayloraswift/swift-png.git", from: "4.5.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         .package(path: "./swift-libpng"),
         .package(path: "./swift-cbor"),
@@ -40,7 +39,6 @@ let package = Package(
                 .byName(name: "ChromatographBackend"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "HummingbirdWSTesting", package: "hummingbird-websocket"),
-                .product(name: "PNG", package: "swift-png"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Tests/AppTests"

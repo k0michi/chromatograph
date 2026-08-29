@@ -1,6 +1,6 @@
 import Crypto
 import Foundation
-import PNG
+import LibPNG
 import Testing
 
 @testable import ChromatographBackend
@@ -67,7 +67,7 @@ struct ChunkManagerTests {
     let manager = ChunkManager()
     let valid = try blendOperation(
       chunk: TileChunk(x: 0, y: 0),
-      color: PNG.RGBA<UInt8>(255, 0, 0, 255)
+      color: .init(255, 0, 0, 255)
     )
     let invalid = BlendOperation(
       chunk: TileChunk(x: 1, y: 0),
@@ -93,7 +93,7 @@ struct ChunkManagerTests {
     try await manager.apply(
       patch(
         hash: parentHash,
-        operation: .blend(try blendOperation(color: PNG.RGBA<UInt8>(255, 0, 0, 255)))
+        operation: .blend(try blendOperation(color: .init(255, 0, 0, 255)))
       ))
     let before = try await manager.snapshot(x: 0, y: 0)
 
@@ -152,7 +152,7 @@ struct ChunkManagerTests {
       patch(
         hash: blendHash,
         operation: ChromatographBackend.Operation.blend(
-          try blendOperation(color: PNG.RGBA<UInt8>(255, 0, 0, 255))
+          try blendOperation(color: .init(255, 0, 0, 255))
         )
       ))
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
@@ -185,7 +185,7 @@ struct ChunkManagerTests {
       patch(
         hash: blendHash,
         operation: ChromatographBackend.Operation.blend(
-          try blendOperation(color: PNG.RGBA<UInt8>(0, 255, 0, 255))
+          try blendOperation(color: .init(0, 255, 0, 255))
         )
       ))
 
@@ -296,17 +296,9 @@ private func canonicalPatch(operations: [ChromatographBackend.Operation]) throws
 
 private func blendOperation(
   chunk: TileChunk = TileChunk(x: 0, y: 0),
-  color: PNG.RGBA<UInt8>
+  color: RGBA
 ) throws -> BlendOperation {
-  let pixels = [PNG.RGBA<UInt8>](repeating: color, count: 256 * 256)
-  let image = PNG.Image(
-    packing: pixels,
-    size: (x: 256, y: 256),
-    layout: .init(format: .rgba8(palette: [], fill: nil))
-  )
-  var destination = TestPNGDestination()
-  try image.compress(stream: &destination, level: 0)
-  let data = Data(destination.bytes)
+  let data = try encodeRGBA8(Array(repeating: [color.red, color.green, color.blue, color.alpha], count: 256 * 256).flatMap { $0 })
   let payloadHash = registerManagerImage(data)
   return .init(
     chunk: chunk,
@@ -325,10 +317,29 @@ private func registerManagerImage(_ data: Data) -> String {
   return value
 }
 
-private struct TestPNGDestination: PNG.BytestreamDestination {
-  var bytes: [UInt8] = []
-  mutating func write(_ bytes: [UInt8]) -> Void? {
-    self.bytes.append(contentsOf: bytes)
-    return ()
+private struct RGBA {
+  let red: UInt8
+  let green: UInt8
+  let blue: UInt8
+  let alpha: UInt8
+
+  init(_ red: UInt8, _ green: UInt8, _ blue: UInt8, _ alpha: UInt8) {
+    self.red = red
+    self.green = green
+    self.blue = blue
+    self.alpha = alpha
   }
+}
+
+private func encodeRGBA8(_ pixels: [UInt8]) throws -> Data {
+  let write = try WriteStruct.create()
+  let info = try write.createInfoStruct()
+  try write.setWriteData()
+  try write.setIHDR(info, .init(width: 256, height: 256, bitDepth: 8, colorType: .rgba))
+  try write.writeInfo(info)
+  for offset in stride(from: 0, to: pixels.count, by: 256 * 4) {
+    try write.writeRow(info, Array(pixels[offset..<(offset + 256 * 4)]))
+  }
+  try write.writeEnd(info)
+  return try write.writeData()
 }

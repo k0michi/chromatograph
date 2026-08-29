@@ -5,8 +5,8 @@ import Hummingbird
 import HummingbirdTesting
 import HummingbirdWSTesting
 import HummingbirdWebSocket
+import LibPNG
 import Logging
-import PNG
 import Testing
 
 @testable import ChromatographBackend
@@ -215,28 +215,21 @@ struct AppTests {
   }
 }
 
-private struct PNGMemoryDestination: PNG.BytestreamDestination {
-  var bytes: [UInt8] = []
-
-  mutating func write(_ bytes: [UInt8]) -> Void? {
-    self.bytes.append(contentsOf: bytes)
-    return ()
-  }
+private func testPNG() throws -> Data {
+  try encodeRGBA8([UInt8](repeating: 12, count: 256 * 256 * 4))
 }
 
-private func testPNG() throws -> Data {
-  let pixels = [PNG.RGBA<UInt8>](
-    repeating: .init(12, 34, 56, 78),
-    count: 256 * 256
-  )
-  let image = PNG.Image(
-    packing: pixels,
-    size: (x: 256, y: 256),
-    layout: .init(format: .rgba8(palette: [], fill: nil))
-  )
-  var destination = PNGMemoryDestination()
-  try image.compress(stream: &destination, level: 3)
-  return Data(destination.bytes)
+private func encodeRGBA8(_ pixels: [UInt8]) throws -> Data {
+  let write = try WriteStruct.create()
+  let info = try write.createInfoStruct()
+  try write.setWriteData()
+  try write.setIHDR(info, .init(width: 256, height: 256, bitDepth: 8, colorType: .rgba))
+  try write.writeInfo(info)
+  for offset in stride(from: 0, to: pixels.count, by: 256 * 4) {
+    try write.writeRow(info, Array(pixels[offset..<(offset + 256 * 4)]))
+  }
+  try write.writeEnd(info)
+  return try write.writeData()
 }
 
 private func testBlendOperation(chunk: TileChunk) throws -> BlendOperation {
