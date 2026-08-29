@@ -20,6 +20,8 @@ import { KeyringStore } from "~/crypto/KeyringStore";
 import { KeySettings } from "~/crypto/KeySettings";
 import { ShortcutManager } from "~/ui/ShortcutManager";
 import { ColorControl } from "~/ui/ColorControl";
+import { ColorStore } from "~/color/ColorStore";
+import { SwatchesPanel } from "~/color/SwatchesPanel";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -180,6 +182,7 @@ export default function Index() {
   const rulersRef = useRef<CanvasRulersHandle>(null);
   const networkDebugStore = useReader(NetworkDebugStore);
   const keyringStore = useReader(KeyringStore);
+  const colorStore = useReader(ColorStore);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
   const [shortcuts, setShortcuts] = useState(ShortcutManager.nonApple);
@@ -188,6 +191,8 @@ export default function Index() {
 
   const [foregroundColor, setForegroundColor] = useState("#000000");
   const [backgroundColor, setBackgroundColor] = useState("#ffffff");
+  const foregroundColorRef = useRef(foregroundColor);
+  foregroundColorRef.current = foregroundColor;
   const [tool, setTool] = useState<Tool>("brush");
   const [size, setSize] = useState(40);
   const [hardness, setHardness] = useState(0.8);
@@ -214,6 +219,12 @@ export default function Index() {
   };
   const swapColorsRef = useRef(swapColors);
   swapColorsRef.current = swapColors;
+  const selectForegroundColor = (nextColor: string) => {
+    setForegroundColor(nextColor);
+  };
+  const selectBackgroundColor = (nextColor: string) => {
+    setBackgroundColor(nextColor);
+  };
 
   const menus: MenuBarMenu[] = [
     {
@@ -503,6 +514,11 @@ export default function Index() {
           dragging: false,
         };
         return;
+      }
+      if (activeTool === "brush") {
+        void colorStore.remember(foregroundColorRef.current).catch((error: unknown) => {
+          console.error("Failed to save used color:", error);
+        });
       }
       isPainting = true;
       stroke = new BrushStroke(renderer, brush);
@@ -797,15 +813,18 @@ export default function Index() {
         <ColorControl
           foreground={foregroundColor}
           background={backgroundColor}
-          onForegroundChange={setForegroundColor}
-          onBackgroundChange={setBackgroundColor}
+          onForegroundChange={selectForegroundColor}
+          onBackgroundChange={selectBackgroundColor}
           onSwap={swapColors}
-          onReset={() => { setForegroundColor("#000000"); setBackgroundColor("#ffffff"); }}
+          onReset={() => { selectForegroundColor("#000000"); selectBackgroundColor("#ffffff"); }}
         />
       </div>
       {showRulers ? <CanvasRulers ref={rulersRef} top={CHROME_TOP} left={52} right={300} /> : null}
       {/* Right sidebar (docked panels; will become movable windows later) */}
       <aside style={sidebarStyle}>
+        <PanelWindow title="Swatches" contentPadding={0}>
+          <SwatchesPanel currentColor={foregroundColor} onSelect={selectForegroundColor} />
+        </PanelWindow>
         <PanelWindow title="History">
           <OperationHistoryPanel
             items={operationHistory}

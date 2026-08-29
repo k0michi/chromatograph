@@ -3,6 +3,7 @@ import { useState } from "react";
 export interface PanelWindowProps {
   readonly title: string;
   readonly defaultCollapsed?: boolean;
+  readonly contentPadding?: number | string;
   readonly children: React.ReactNode;
 }
 
@@ -11,7 +12,7 @@ export interface PanelWindowProps {
  * styled as a window title bar so these can later be detached into freely
  * movable floating windows.
  */
-export function PanelWindow({ title, defaultCollapsed = false, children }: PanelWindowProps) {
+export function PanelWindow({ title, defaultCollapsed = false, contentPadding = 8, children }: PanelWindowProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   return (
@@ -51,7 +52,7 @@ export function PanelWindow({ title, defaultCollapsed = false, children }: Panel
         <span style={{ opacity: 0.6, fontSize: 9 }}>{collapsed ? "▶" : "▼"}</span>
         {title}
       </button>
-      {!collapsed && <div style={{ padding: 8 }}>{children}</div>}
+      {!collapsed && <div style={{ padding: contentPadding }}>{children}</div>}
     </section>
   );
 }

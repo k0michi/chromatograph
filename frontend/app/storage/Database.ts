@@ -1,5 +1,5 @@
 export const DATABASE_NAME = "chromatograph";
-export const DATABASE_VERSION = 2;
+export const DATABASE_VERSION = 3;
 
 let databasePromise: Promise<IDBDatabase> | null = null;
 
@@ -19,6 +19,9 @@ export function openChromatographDatabase(): Promise<IDBDatabase> {
       }
       if (!database.objectStoreNames.contains("preferences")) {
         database.createObjectStore("preferences", { keyPath: "key" });
+      }
+      if (!database.objectStoreNames.contains("colors")) {
+        database.createObjectStore("colors", { keyPath: "key" });
       }
     };
     request.onsuccess = () => resolve(request.result);
