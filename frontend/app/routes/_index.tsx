@@ -18,6 +18,7 @@ import { PanelWindow } from "~/ui/PanelWindow";
 import { useReader } from "~/store/Store";
 import { KeyringStore } from "~/crypto/KeyringStore";
 import { KeySettings } from "~/crypto/KeySettings";
+import { ShortcutManager } from "~/ui/ShortcutManager";
 import type { Route } from "./+types/_index";
 
 const MENU_BAR_HEIGHT = 28;
@@ -180,6 +181,9 @@ export default function Index() {
   const keyringStore = useReader(KeyringStore);
   const cursorScreenRef = useRef<{ x: number; y: number } | null>(null);
   const cursorNeedsInspectionRef = useRef(false);
+  const [shortcuts, setShortcuts] = useState(ShortcutManager.nonApple);
+  const shortcutsRef = useRef(shortcuts);
+  shortcutsRef.current = shortcuts;
 
   const [color, setColor] = useState("#222222");
   const [tool, setTool] = useState<Tool>("brush");
@@ -206,20 +210,20 @@ export default function Index() {
   const menus: MenuBarMenu[] = [
     {
       label: "Chromatograph",
-      items: [{ label: "Settings…", shortcut: "⌘,", onSelect: () => setSettingsOpen(true) }],
+      items: [{ label: "Settings…", shortcut: shortcuts.label("settings"), onSelect: () => setSettingsOpen(true) }],
     },
     {
       label: "Edit",
       items: [
         {
           label: "Undo",
-          shortcut: "⌘Z",
+          shortcut: shortcuts.label("undo"),
           disabled: () => !rendererRef.current?.canUndo,
           onSelect: () => void rendererRef.current?.undo(),
         },
         {
           label: "Redo",
-          shortcut: "⇧⌘Z",
+          shortcut: shortcuts.label("redo"),
           disabled: () => !rendererRef.current?.canRedo,
           onSelect: () => void rendererRef.current?.redo(),
         },
@@ -447,16 +451,12 @@ export default function Index() {
         if (key === "z") return setTool("zoom");
         if (key === "r") return setTool("rotate");
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      if (shortcutsRef.current.matches(event, "undo")) {
         event.preventDefault();
-        if (event.shiftKey) {
-          void renderer.redo();
-        } else {
-          void renderer.undo();
-        }
+        void renderer.undo();
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+      if (shortcutsRef.current.matches(event, "redo")) {
         event.preventDefault();
         void renderer.redo();
       }
@@ -625,15 +625,19 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
+    setShortcuts(ShortcutManager.detect());
+  }, []);
+
+  useEffect(() => {
     const onSettingsShortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+      if (shortcuts.matches(event, "settings")) {
         event.preventDefault();
         setSettingsOpen(true);
       }
     };
     window.addEventListener("keydown", onSettingsShortcut);
     return () => window.removeEventListener("keydown", onSettingsShortcut);
-  }, []);
+  }, [shortcuts]);
 
   return (
     <>
