@@ -296,15 +296,25 @@ private func testPatch(
     timestamp: timestamp,
     hash: hash.hexString,
     signatureHex: signature.hexString,
-    images: hashes.compactMap { testImageRegistry[$0] }
+    images: hashes.compactMap(testImage(for:))
   )
 }
 
 nonisolated(unsafe) private var testImageRegistry: [String: Data] = [:]
+private let testImageRegistryLock = NSLock()
+
 private func registerTestImage(_ data: Data) -> String {
   let hash = Data(SHA256.hash(data: data)).hexString
+  testImageRegistryLock.lock()
+  defer { testImageRegistryLock.unlock() }
   testImageRegistry[hash] = data
   return hash
+}
+
+private func testImage(for hash: String) -> Data? {
+  testImageRegistryLock.lock()
+  defer { testImageRegistryLock.unlock() }
+  return testImageRegistry[hash]
 }
 
 extension Data {

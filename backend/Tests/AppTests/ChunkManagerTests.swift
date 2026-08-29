@@ -284,7 +284,7 @@ private func patch(hash: String, operations: [ChromatographBackend.Operation]) -
     timestamp: 0,
     hash: hash,
     signatureHex: String(repeating: "33", count: 64),
-    images: hashes.compactMap { managerImages[$0] }
+    images: hashes.compactMap(managerImage(for:))
   )
 }
 
@@ -311,10 +311,20 @@ private func blendOperation(
 }
 
 nonisolated(unsafe) private var managerImages: [String: Data] = [:]
+private let managerImagesLock = NSLock()
+
 private func registerManagerImage(_ data: Data) -> String {
   let value = Data(SHA256.hash(data: data)).cborHex
+  managerImagesLock.lock()
+  defer { managerImagesLock.unlock() }
   managerImages[value] = data
   return value
+}
+
+private func managerImage(for hash: String) -> Data? {
+  managerImagesLock.lock()
+  defer { managerImagesLock.unlock() }
+  return managerImages[hash]
 }
 
 private struct RGBA {
