@@ -46,8 +46,9 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
       storageDirectory: URL(filePath: storagePath, directoryHint: .isDirectory)
     )
   }
-  let broadcaster = PatchBroadcaster(store: store)
-  let router = try buildRouter(broadcaster: broadcaster)
+  let chunks = ChunkManager(store: store)
+  let broadcaster = PatchBroadcaster()
+  let router = try buildRouter(chunks: chunks, broadcaster: broadcaster)
   let wsRouter = try buildWebSocketRouter(broadcaster: broadcaster)
   let app = Application(
     router: router,
@@ -62,7 +63,10 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
 }
 
 /// Build router
-func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestContext> {
+func buildRouter(
+  chunks: ChunkManager,
+  broadcaster: PatchBroadcaster
+) throws -> Router<AppRequestContext> {
   let router = Router(context: AppRequestContext.self)
   router.addMiddleware {
     LogRequestsMiddleware(.info)
@@ -74,7 +78,7 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
       let from = request.uri.queryParameters["from"].map(String.init)
     else { throw HTTPError(.badRequest) }
     do {
-      let data = try await broadcaster.replay(x: x, y: y, from: from)
+      let data = try await ChunkReplayPacketCodec.encode(chunks.replay(x: x, y: y, from: from))
       return Response(
         status: .ok,
         headers: [.contentType: "application/octet-stream"],
@@ -90,8 +94,10 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
       from: request,
       context: context
     )
-    let chunks = snapshotRequest.chunks.map { TileChunk(x: $0.x, y: $0.y) }
-    let data = try await broadcaster.snapshots(chunks: chunks)
+    let requestedChunks = snapshotRequest.chunks.map { TileChunk(x: $0.x, y: $0.y) }
+    let data = try await SnapshotPacketCodec.encode(
+      chunks.latestSnapshots(for: requestedChunks)
+    )
     return Response(
       status: .ok,
       headers: [.contentType: "application/octet-stream"],
@@ -114,12 +120,13 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
       throw HTTPError(.badRequest)
     }
     do {
-      switch try await broadcaster.accept(patch) {
-      case .created:
-        return Response(status: .created)
-      case .alreadyExists:
-        return Response(status: .ok)
-      }
+      let snapshots = try await chunks.apply(patch)
+      try await broadcaster.broadcast(patch: patch, snapshots: snapshots)
+      return Response(status: .created)
+    } catch ChunkManagerError.duplicatePatch {
+      // A retry after a committed Patch lost its response is successful and
+      // deliberately does not recompute snapshots or broadcast another update.
+      return Response(status: .ok)
     } catch is ChunkManagerError {
       // The packet is structurally valid, but cannot be applied to the current DAG.
       throw HTTPError(.unprocessableContent)

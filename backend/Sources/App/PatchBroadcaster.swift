@@ -3,10 +3,6 @@ import Hummingbird
 import HummingbirdWebSocket
 
 actor PatchBroadcaster {
-  enum AcceptResult {
-    case created
-    case alreadyExists
-  }
   typealias ConnectionID = UUID
 
   private struct Connection {
@@ -14,12 +10,6 @@ actor PatchBroadcaster {
   }
 
   private var connections: [ConnectionID: Connection] = [:]
-  private var committedHashes: Set<String> = []
-  private let chunks: ChunkManager
-
-  init(store: any ChunkStore = MemoryChunkStore()) {
-    chunks = ChunkManager(store: store)
-  }
 
   func addConnection(_ writer: WebSocketOutboundWriter) -> ConnectionID {
     let id = ConnectionID()
@@ -31,39 +21,13 @@ actor PatchBroadcaster {
     connections[id] = nil
   }
 
-  func replay(x: Int32, y: Int32, from hash: String) async throws -> Data {
-    try await ChunkReplayPacketCodec.encode(chunks.replay(x: x, y: y, from: hash))
-  }
-
-  func snapshots(chunks: [TileChunk]) async throws -> Data {
-    try await SnapshotPacketCodec.encode(self.chunks.latestSnapshots(for: chunks))
-  }
-
-  func accept(_ patch: Patch) async throws -> AcceptResult {
-    var responsePackets: [ByteBuffer] = []
-    var result = AcceptResult.alreadyExists
-    if !committedHashes.contains(patch.hash) {
-      do {
-        let snapshots = try await chunks.apply(patch)
-        committedHashes.insert(patch.hash)
-        result = .created
-        responsePackets = [
-          ByteBuffer(
-            bytes: BroadcastPacketCodec.encode(
-              kind: .patch,
-              payload: try PatchPacketCodec.encode(patch)
-            )),
-          ByteBuffer(
-            bytes: BroadcastPacketCodec.encode(
-              kind: .snapshots,
-              payload: try SnapshotPacketCodec.encode(snapshots)
-            )),
-        ]
-      } catch ChunkManagerError.duplicatePatch {
-        // A client may retry after the server committed the Patch but its ACK was lost.
-        committedHashes.insert(patch.hash)
-      }
-    }
+  func broadcast(patch: Patch, snapshots: [ChunkSnapshot]) async throws {
+    let responsePackets = [
+      ByteBuffer(bytes: BroadcastPacketCodec.encode(
+        kind: .patch, payload: try PatchPacketCodec.encode(patch))),
+      ByteBuffer(bytes: BroadcastPacketCodec.encode(
+        kind: .snapshots, payload: try SnapshotPacketCodec.encode(snapshots))),
+    ]
 
     var disconnected: [ConnectionID] = []
     for id in Array(connections.keys) {
@@ -79,7 +43,5 @@ actor PatchBroadcaster {
     for id in disconnected {
       connections[id] = nil
     }
-
-    return result
   }
 }

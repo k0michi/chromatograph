@@ -55,8 +55,8 @@ actor ChunkManager {
     self.patchCache = LRUCache(capacity: hotPatchCapacity)
   }
 
-  /// Validates and applies every operation in a patch as one transaction.
-  /// No DAG or snapshot state is changed unless all affected chunks render successfully.
+  /// Validates the Patch DAG, persists the Patch, then updates derived DAG and snapshot state.
+  /// The immutable Patch is the commit point; snapshots are disposable derived data.
   func apply(_ patch: Patch) throws -> [ChunkSnapshot] {
     try loadIfNeeded()
     guard !committedHashes.contains(patch.hash) else {
@@ -65,22 +65,34 @@ actor ChunkManager {
 
     try validate(patch)
 
-    // Prime the cache so the render below can resolve this patch's own images
-    // before it is written to the store.
-    patchCache.set(patch.hash, patch)
-
     var touched: Set<TileChunkKey> = []
     var candidateEntries = entriesByChunk
     for (key, entry) in try expandedEntries(for: patch) {
       candidateEntries[key, default: []].append(entry)
       touched.insert(key)
     }
+
+    // Calculate all non-raster derived state before reaching the commit point.
+    var candidateHeadPatchHashes = headPatchHashes
+    for key in touched {
+      candidateHeadPatchHashes[key] = try linearize(candidateEntries[key] ?? []).last?.patchHash
+        ?? patch.hash
+    }
+
+    // A validated Patch becomes authoritative immediately. Rendering below can
+    // always reload it from the store, even if the bounded cache evicts it.
+    try store.storePatch(patch)
+    entriesByChunk = candidateEntries
+    headPatchHashes = candidateHeadPatchHashes
+    committedHashes.insert(patch.hash)
+    chunksByPatchHash[patch.hash] = touched
+
     var candidateSnapshots: [TileChunkKey: [UInt8]] = [:]
     for key in touched {
-      candidateSnapshots[key] = try render(candidateEntries[key] ?? [])
+      candidateSnapshots[key] = try render(entriesByChunk[key] ?? [])
     }
     let cachedSnapshots = try touched.sorted().map { key in
-      let head = try linearize(candidateEntries[key] ?? []).last?.patchHash ?? patch.hash
+      let head = headPatchHashes[key] ?? patch.hash
       return CachedChunkSnapshot(
         snapshot: ChunkSnapshot(
           chunk: TileChunk(x: key.x, y: key.y),
@@ -91,19 +103,13 @@ actor ChunkManager {
             height: Self.tileSize
           )
         ),
-        stateHash: try stateHash(candidateEntries[key] ?? [])
+        stateHash: try stateHash(entriesByChunk[key] ?? [])
       )
     }
-    try store.commit(patch: patch, snapshots: cachedSnapshots)
-    entriesByChunk = candidateEntries
+    try store.storeSnapshots(cachedSnapshots)
     for (key, snapshot) in candidateSnapshots {
       snapshotCache.set(key, snapshot)
     }
-    for snapshot in cachedSnapshots.map(\.snapshot) {
-      headPatchHashes[TileChunkKey(snapshot.chunk)] = snapshot.headPatchHash
-    }
-    committedHashes.insert(patch.hash)
-    chunksByPatchHash[patch.hash] = touched
     return cachedSnapshots.map(\.snapshot)
   }
 

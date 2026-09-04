@@ -41,8 +41,9 @@ protocol ChunkStore: Sendable {
   /// the store has no such patch.
   func patch(hash: String) throws -> Patch?
   func snapshot(x: Int32, y: Int32, stateHash: String) throws -> Data?
+  /// Persists the immutable Patch as soon as its DAG references are known to be valid.
+  func storePatch(_ patch: Patch) throws
   func storeSnapshots(_ snapshots: [CachedChunkSnapshot]) throws
-  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws
 }
 
 /// Keeps everything in memory. Used when no storage paths are configured; it has
@@ -59,7 +60,7 @@ final class MemoryChunkStore: ChunkStore, @unchecked Sendable {
   func snapshot(x: Int32, y: Int32, stateHash: String) throws -> Data? { nil }
   func storeSnapshots(_ snapshots: [CachedChunkSnapshot]) throws {}
 
-  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws {
+  func storePatch(_ patch: Patch) throws {
     if patches[patch.hash] == nil { order.append(patch.hash) }
     patches[patch.hash] = patch
   }
@@ -124,10 +125,7 @@ final class FileSystemChunkStore: ChunkStore, @unchecked Sendable {
     }
   }
 
-  func commit(patch: Patch, snapshots: [CachedChunkSnapshot]) throws {
-    // Snapshot files are written first. The atomic Patch write is the commit point;
-    // snapshots left by an interrupted write are harmless cache entries.
-    try storeSnapshots(snapshots)
+  func storePatch(_ patch: Patch) throws {
     try PatchPacketCodec.encode(patch).write(
       to: patchesDirectory.appending(path: "\(patch.hash).patch"),
       options: .atomic

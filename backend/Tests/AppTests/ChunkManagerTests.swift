@@ -69,16 +69,17 @@ struct ChunkManagerTests {
       chunk: TileChunk(x: 0, y: 0),
       color: .init(255, 0, 0, 255)
     )
+    let missing = hash("99")
     let invalid = BlendOperation(
       chunk: TileChunk(x: 1, y: 0),
-      parent: rootPatchHash,
+      parent: missing,
       compositeOp: .sourceOver,
       blendMode: .normal,
       opacity: 255,
-      payloadHash: registerManagerImage(Data([0, 1, 2]))
+      payloadHash: valid.payloadHash
     )
 
-    await #expect(throws: (any Error).self) {
+    await #expect(throws: ChunkManagerError.missingParent(missing, invalid.chunk)) {
       try await manager.apply(
         patch(hash: hash("10"), operations: [.blend(valid), .blend(invalid)]))
     }
@@ -269,6 +270,46 @@ struct ChunkManagerTests {
       includingPropertiesForKeys: nil
     ).filter { $0.pathExtension == "png" }
     #expect(recomputedFiles.count == 1)
+  }
+
+  @Test
+  func persistsApplicablePatchBeforeRenderingBeyondPatchCacheCapacity() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(
+      path: "chromatograph-cache-regression-\(UUID().uuidString)",
+      directoryHint: .isDirectory
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try FileSystemChunkStore(storageDirectory: root)
+    var parent = rootPatchHash
+    for _ in 0..<3 {
+      let blend = try blendOperation(color: .init(1, 2, 3, 255))
+      let stored = try canonicalPatch(operations: [.blend(.init(
+        chunk: blend.chunk,
+        parent: parent,
+        compositeOp: blend.compositeOp,
+        blendMode: blend.blendMode,
+        opacity: blend.opacity,
+        payloadHash: blend.payloadHash
+      ))])
+      try store.storePatch(stored)
+      parent = stored.hash
+    }
+
+    let manager = ChunkManager(store: store, hotPatchCapacity: 2)
+    let blend = try blendOperation(color: .init(4, 5, 6, 255))
+    let applicable = try canonicalPatch(operations: [.blend(.init(
+      chunk: blend.chunk,
+      parent: parent,
+      compositeOp: blend.compositeOp,
+      blendMode: blend.blendMode,
+      opacity: blend.opacity,
+      payloadHash: blend.payloadHash
+    ))])
+
+    let snapshots = try await manager.apply(applicable)
+
+    #expect(snapshots.count == 1)
+    #expect(try store.patch(hash: applicable.hash) == applicable)
   }
 }
 
