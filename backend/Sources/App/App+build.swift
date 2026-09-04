@@ -98,6 +98,33 @@ func buildRouter(broadcaster: PatchBroadcaster) throws -> Router<AppRequestConte
       body: .init(byteBuffer: ByteBuffer(bytes: data))
     )
   }
+  router.post("/api/patches") { request, _ -> Response in
+    let body: ByteBuffer
+    do {
+      body = try await request.body.collect(upTo: maximumPatchPacketSize)
+    } catch {
+      throw HTTPError(.contentTooLarge)
+    }
+    let patch: Patch
+    do {
+      patch = try PatchPacketCodec.decode(Data(body.readableBytesView))
+      try PatchValidator.validate(patch)
+      try validatePatchImages(patch)
+    } catch {
+      throw HTTPError(.badRequest)
+    }
+    do {
+      switch try await broadcaster.accept(patch) {
+      case .created:
+        return Response(status: .created)
+      case .alreadyExists:
+        return Response(status: .ok)
+      }
+    } catch is ChunkManagerError {
+      // The packet is structurally valid, but cannot be applied to the current DAG.
+      throw HTTPError(.unprocessableContent)
+    }
+  }
   return router
 }
 
@@ -113,19 +140,8 @@ func buildWebSocketRouter(broadcaster: PatchBroadcaster) throws -> Router<AppWSR
     let connectionID = await broadcaster.addConnection(outbound)
     do {
       for try await message in inbound.messages(maxSize: maximumPatchPacketSize) {
-        switch message {
-        case .binary(let buffer):
-          do {
-            let patch = try PatchPacketCodec.decode(Data(buffer.readableBytesView))
-            try PatchValidator.validate(patch)
-            try validatePatchImages(patch)
-            try await broadcaster.accept(patch, from: connectionID)
-          } catch {
-            try await outbound.write(.text("Invalid patch packet"))
-          }
-        case .text:
-          try await outbound.write(.text("Patch packets must be binary"))
-        }
+        _ = message
+        try await outbound.write(.text("Patch uploads require POST /api/patches"))
       }
     } catch {
       await broadcaster.remove(connectionID)

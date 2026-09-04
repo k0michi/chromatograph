@@ -305,7 +305,7 @@ export default function Index() {
     }
 
     const client = new Client(window.location.href, {
-      onError: (error) => console.error("Patch WebSocket error:", error),
+      onError: (error) => console.error("Patch network error:", error),
     });
     const unsubscribePacketLogs = client.subscribePacketLogs((entry) => {
       networkDebugStore.append(entry);

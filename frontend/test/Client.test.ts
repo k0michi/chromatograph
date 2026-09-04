@@ -4,7 +4,7 @@ import { Patch } from "../app/canvas/Patch";
 import { PatchDecoder, PatchEncoder } from "../app/canvas/serializePatch";
 import { OperationDecoder, OperationEncoder } from "../app/canvas/serializeOperations";
 import { BinaryWriter } from "../app/network/BinaryWriter";
-import { Client } from "../app/network/Client";
+import { Client, PatchUploadError } from "../app/network/Client";
 import { MemoryPatchOutbox } from "../app/network/PatchOutbox";
 import { PACKET_VERSION } from "../app/network/PacketVersion";
 import { Sha256 } from "../app/crypto/sha256";
@@ -60,8 +60,10 @@ describe("Client", () => {
     const listener = vi.fn();
     const packetLogger = vi.fn();
     const connectionStateListener = vi.fn();
+    const request = vi.fn(async () => ({ ok: true, status: 201 }) as Response);
     const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
+      fetch: request,
     });
     client.subscribeSnapshots(listener);
     client.subscribePacketLogs(packetLogger);
@@ -78,7 +80,12 @@ describe("Client", () => {
     ]);
 
     await client.send(patch);
-    expect(socket.sent[0]).toEqual(PatchEncoder.encode(patch));
+    expect(socket.sent).toHaveLength(0);
+    expect(request).toHaveBeenCalledWith(new URL("http://example.test/api/patches"), {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: PatchEncoder.encode(patch),
+    });
 
     const imageBytes = new Uint8Array([1, 2, 3]);
     socket.receive(broadcastPacket(2, snapshotPacket(12, -5, patch.hash, imageBytes)).buffer);
@@ -138,49 +145,57 @@ describe("Client", () => {
     expect(patches).not.toHaveBeenCalled();
   });
 
-  it("queues patches while connecting", async () => {
+  it("uploads patches over HTTP without waiting for the WebSocket", async () => {
     const socket = new MockWebSocket();
+    const request = vi.fn(async () => ({ ok: true, status: 201 }) as Response);
     const client = new Client("ws://example.test/ws", {
       createWebSocket: () => socket as unknown as WebSocket,
+      fetch: request,
     });
-    const connecting = client.connect();
-    const sending = client.send(patch);
+    await client.send(patch);
+    expect(request).toHaveBeenCalledOnce();
     expect(socket.sent).toHaveLength(0);
-
-    socket.open();
-    await connecting;
-    await sending;
-    expect(socket.sent).toHaveLength(1);
   });
 
-  it("resends persisted patches after reload and removes them only after acknowledgement", async () => {
+  it("keeps failed uploads and removes them after a successful retry", async () => {
     const outbox = new MemoryPatchOutbox();
-    const firstSocket = new MockWebSocket();
-    const firstClient = new Client("ws://example.test/ws", {
-      createWebSocket: () => firstSocket as unknown as WebSocket,
+    const firstClient = new Client("https://example.test", {
+      fetch: async () => { throw new TypeError("Network unavailable"); },
       patchOutbox: outbox,
     });
-    const firstConnection = firstClient.connect();
-    firstSocket.open();
-    await firstConnection;
-    await firstClient.send(patch);
+    await expect(firstClient.send(patch)).rejects.toMatchObject({
+      name: "PatchUploadError",
+      retryable: true,
+    });
     expect(await outbox.entries()).toHaveLength(1);
-    firstClient.close();
 
     const secondSocket = new MockWebSocket();
+    const request = vi.fn(async () => ({ ok: true, status: 200 }) as Response);
     const secondClient = new Client("ws://example.test/ws", {
       createWebSocket: () => secondSocket as unknown as WebSocket,
+      fetch: request,
       patchOutbox: outbox,
     });
     const secondConnection = secondClient.connect();
     secondSocket.open();
     await secondConnection;
-    await vi.waitFor(() => expect(secondSocket.sent).toHaveLength(1));
-    expect(secondSocket.sent[0]).toEqual(PatchEncoder.encode(patch));
-
-    secondSocket.receive(broadcastPacket(3, new TextEncoder().encode(patch.hash)).buffer);
     await vi.waitFor(async () => expect(await outbox.entries()).toHaveLength(0));
+    expect(request).toHaveBeenCalledOnce();
+    expect(secondSocket.sent).toHaveLength(0);
     secondClient.close();
+  });
+
+  it("classifies rejected Patch uploads as non-retryable and removes the poison entry", async () => {
+    const outbox = new MemoryPatchOutbox();
+    const client = new Client("https://example.test", {
+      fetch: async () => ({ ok: false, status: 422 }) as Response,
+      patchOutbox: outbox,
+    });
+
+    await expect(client.send(patch)).rejects.toEqual(
+      expect.objectContaining<Partial<PatchUploadError>>({ status: 422, retryable: false }),
+    );
+    expect(await outbox.entries()).toHaveLength(0);
   });
 
   it("fetches and decodes a chunk replay over HTTPS", async () => {
@@ -258,7 +273,7 @@ describe("Client", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("queues a patch after an offline snapshot fallback and sends it on connect", async () => {
+  it("keeps a patch after an offline snapshot fallback", async () => {
     const outbox = new MemoryPatchOutbox();
     const socket = new MockWebSocket();
     const client = new Client("https://example.test", {
@@ -268,15 +283,10 @@ describe("Client", () => {
     });
 
     await expect(client.fetchSnapshots([{ x: 12, y: -5 }])).resolves.toEqual([]);
-    await client.send(patch);
+    await expect(client.send(patch)).rejects.toBeInstanceOf(PatchUploadError);
     expect(await outbox.entries()).toHaveLength(1);
     expect(socket.sent).toHaveLength(0);
 
-    const connecting = client.connect();
-    socket.open();
-    await connecting;
-    await vi.waitFor(() => expect(socket.sent).toEqual([PatchEncoder.encode(patch)]));
-    client.close();
   });
 });
 

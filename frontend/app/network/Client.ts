@@ -33,6 +33,18 @@ export interface NetworkPacketLogEntry {
 
 export type WebSocketConnectionState = "disconnected" | "connected";
 
+export class PatchUploadError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly retryable = true,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "PatchUploadError";
+  }
+}
+
 export class Client implements Disposable {
   private static readonly connecting = 0;
   private static readonly open = 1;
@@ -49,7 +61,6 @@ export class Client implements Disposable {
   private outboxFlushChain: Promise<void> = Promise.resolve();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByClient = false;
-  private readonly sentPatchHashes = new Set<string>();
   private viewport: ChunkViewport | null = null;
   private readonly inflightSnapshots = new Map<string, Promise<ChunkSnapshotPacket | null>>();
 
@@ -74,7 +85,6 @@ export class Client implements Disposable {
     const socket = createWebSocket(this.url("/ws", "websocket").href);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
-    this.sentPatchHashes.clear();
 
     this.connectPromise = new Promise<void>((resolve, reject) => {
       let didOpen = false;
@@ -83,7 +93,7 @@ export class Client implements Disposable {
         this.connectPromise = null;
         this.clearReconnectTimer();
         this.setConnectionState("connected");
-        void this.flushOutbox(socket).catch((error: unknown) => this.options.onError?.(error));
+        void this.flushOutbox().catch((error: unknown) => this.options.onError?.(error));
         resolve();
       };
       socket.onerror = () => {
@@ -118,12 +128,7 @@ export class Client implements Disposable {
     this.outboxWriteChain = write.catch(() => {});
     await write;
 
-    const socket = this.socket;
-    if (socket?.readyState === Client.open) {
-      await this.flushOutbox(socket);
-    } else {
-      this.scheduleReconnect(0);
-    }
+    await this.flushOutbox();
   }
 
   setViewport(viewport: ChunkViewport): void {
@@ -270,11 +275,6 @@ export class Client implements Disposable {
           }));
         if (snapshots.length === 0) return;
         for (const listener of this.snapshotListeners) listener(snapshots);
-      } else if (kind === 3) {
-        const hash = new TextDecoder().decode(payload);
-        if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("Invalid Patch acknowledgement hash.");
-        this.logPacket("receive", "Acknowledgement", data.byteLength, `hash ${this.shortHash(hash)}`);
-        void this.patchOutbox.delete(hash).catch((error: unknown) => this.options.onError?.(error));
       } else {
         this.logPacket("receive", "Unknown", data.byteLength, `kind ${kind}`);
         throw new Error(`Unsupported broadcast packet kind ${kind}.`);
@@ -284,15 +284,28 @@ export class Client implements Disposable {
     }
   }
 
-  private flushOutbox(socket: WebSocket): Promise<void> {
+  private flushOutbox(): Promise<void> {
     const flush = this.outboxFlushChain.then(async () => {
       const patches = await this.patchOutbox.entries();
       for (const patch of patches) {
-        if (this.socket !== socket || socket.readyState !== Client.open) return;
-        if (this.sentPatchHashes.has(patch.hash)) continue;
-        socket.send(patch.packet);
-        this.sentPatchHashes.add(patch.hash);
+        const request = this.options.fetch ?? ((input: URL, init?: RequestInit) => fetch(input, init));
+        let response: Response;
+        try {
+          response = await request(this.url("/api/patches", "http"), {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: patch.packet,
+          });
+        } catch (cause) {
+          throw new PatchUploadError("Patch upload failed because the server is unreachable.", undefined, true, { cause });
+        }
+        if (!response.ok) {
+          const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+          if (!retryable) await this.patchOutbox.delete(patch.hash);
+          throw new PatchUploadError(`Patch upload failed (${response.status}).`, response.status, retryable);
+        }
         this.logPacket("send", "Patch", patch.packet.byteLength, `hash ${this.shortHash(patch.hash)}`);
+        await this.patchOutbox.delete(patch.hash);
       }
     });
     this.outboxFlushChain = flush.catch(() => {});

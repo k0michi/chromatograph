@@ -3,6 +3,10 @@ import Hummingbird
 import HummingbirdWebSocket
 
 actor PatchBroadcaster {
+  enum AcceptResult {
+    case created
+    case alreadyExists
+  }
   typealias ConnectionID = UUID
 
   private struct Connection {
@@ -35,12 +39,14 @@ actor PatchBroadcaster {
     try await SnapshotPacketCodec.encode(self.chunks.latestSnapshots(for: chunks))
   }
 
-  func accept(_ patch: Patch, from connectionID: ConnectionID) async throws {
+  func accept(_ patch: Patch) async throws -> AcceptResult {
     var responsePackets: [ByteBuffer] = []
+    var result = AcceptResult.alreadyExists
     if !committedHashes.contains(patch.hash) {
       do {
         let snapshots = try await chunks.apply(patch)
         committedHashes.insert(patch.hash)
+        result = .created
         responsePackets = [
           ByteBuffer(
             bytes: BroadcastPacketCodec.encode(
@@ -74,10 +80,6 @@ actor PatchBroadcaster {
       connections[id] = nil
     }
 
-    if let sender = connections[connectionID] {
-      try await sender.writer.writeBinaryMessage(ByteBuffer(
-        bytes: BroadcastPacketCodec.encodePatchAcknowledgement(hash: patch.hash)
-      ))
-    }
+    return result
   }
 }
