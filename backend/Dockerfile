@@ -69,8 +69,8 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 
 # Create a hummingbird user and group with /app as its home directory
 RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app hummingbird
-RUN mkdir -p /var/lib/chromatograph /var/lib/chromatograph-snapshots \
-    && chown -R hummingbird:hummingbird /var/lib/chromatograph /var/lib/chromatograph-snapshots
+RUN mkdir -p /var/lib/chromatograph \
+    && chown -R hummingbird:hummingbird /var/lib/chromatograph
 
 # Switch to the new home directory
 WORKDIR /app
@@ -89,4 +89,4 @@ EXPOSE 8080
 
 # Start the Hummingbird service when the image is run, default to listening on 8080 in production environment
 ENTRYPOINT ["./ChromatographBackend"]
-CMD ["--http-host", "0.0.0.0", "--http-port", "8080", "--storage-path", "/var/lib/chromatograph", "--storage-snapshot-path", "/var/lib/chromatograph-snapshots"]
+CMD ["--http-host", "0.0.0.0", "--http-port", "8080", "--storage-path", "/var/lib/chromatograph"]
