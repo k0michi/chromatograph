@@ -21,21 +21,22 @@ actor PatchBroadcaster {
     connections[id] = nil
   }
 
-  func broadcast(patch: Patch, snapshots: [ChunkSnapshot]) async throws {
-    let responsePackets = [
-      ByteBuffer(bytes: BroadcastPacketCodec.encode(
-        kind: .patch, payload: try PatchPacketCodec.encode(patch))),
-      ByteBuffer(bytes: BroadcastPacketCodec.encode(
-        kind: .snapshots, payload: try SnapshotPacketCodec.encode(snapshots))),
-    ]
+  func broadcast(patch: Patch) async throws {
+    try await broadcast(ByteBuffer(bytes: BroadcastPacketCodec.encode(
+      kind: .patch, payload: try PatchPacketCodec.encode(patch))))
+  }
 
+  func broadcast(snapshots: [ChunkSnapshot]) async throws {
+    try await broadcast(ByteBuffer(bytes: BroadcastPacketCodec.encode(
+      kind: .snapshots, payload: try SnapshotPacketCodec.encode(snapshots))))
+  }
+
+  private func broadcast(_ responsePacket: ByteBuffer) async throws {
     var disconnected: [ConnectionID] = []
     for id in Array(connections.keys) {
       guard let connection = connections[id] else { continue }
       do {
-        for responsePacket in responsePackets {
-          try await connection.writer.writeBinaryMessage(responsePacket)
-        }
+        try await connection.writer.writeBinaryMessage(responsePacket)
       } catch {
         disconnected.append(id)
       }

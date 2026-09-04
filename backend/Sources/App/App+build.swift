@@ -48,7 +48,13 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
   }
   let chunks = ChunkManager(store: store)
   let broadcaster = PatchBroadcaster()
-  let router = try buildRouter(chunks: chunks, broadcaster: broadcaster)
+  let snapshotQueue = SnapshotQueue(chunks: chunks, broadcaster: broadcaster, logger: logger)
+  let router = try buildRouter(
+    chunks: chunks,
+    broadcaster: broadcaster,
+    snapshotQueue: snapshotQueue,
+    logger: logger
+  )
   let wsRouter = try buildWebSocketRouter(broadcaster: broadcaster)
   let app = Application(
     router: router,
@@ -65,7 +71,9 @@ func buildApplication(reader: ConfigReader) async throws -> some ApplicationProt
 /// Build router
 func buildRouter(
   chunks: ChunkManager,
-  broadcaster: PatchBroadcaster
+  broadcaster: PatchBroadcaster,
+  snapshotQueue: SnapshotQueue,
+  logger: Logger
 ) throws -> Router<AppRequestContext> {
   let router = Router(context: AppRequestContext.self)
   router.addMiddleware {
@@ -120,8 +128,18 @@ func buildRouter(
       throw HTTPError(.badRequest)
     }
     do {
-      let snapshots = try await chunks.apply(patch)
-      try await broadcaster.broadcast(patch: patch, snapshots: snapshots)
+      let affectedChunks = try await chunks.accept(patch)
+      await snapshotQueue.enqueue(affectedChunks)
+      Task {
+        do {
+          try await broadcaster.broadcast(patch: patch)
+        } catch {
+          logger.error("Patch broadcast failed", metadata: [
+            "error": "\(error)",
+            "patch": "\(patch.hash)",
+          ])
+        }
+      }
       return Response(status: .created)
     } catch ChunkManagerError.duplicatePatch {
       // A retry after a committed Patch lost its response is successful and

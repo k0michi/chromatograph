@@ -11,12 +11,12 @@ struct ChunkManagerTests {
   func replayReturnsTheSnapshotBeforeBlendAndEveryFollowingPatch() async throws {
     let manager = ChunkManager()
     let firstHash = hash("10")
-    try await manager.apply(
+    try await manager.accept(
       patch(hash: firstHash, operation: .blend(try blendOperation(color: .init(255, 0, 0, 255))))
     )
     let secondHash = hash("20")
     let second = try blendOperation(color: .init(0, 255, 0, 255))
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: secondHash,
         operation: .blend(.init(
@@ -39,11 +39,11 @@ struct ChunkManagerTests {
   func replayForUndoStartsBeforeItsTargetBlend() async throws {
     let manager = ChunkManager()
     let blendHash = hash("10")
-    try await manager.apply(
+    try await manager.accept(
       patch(hash: blendHash, operation: .blend(try blendOperation(color: .init(0, 0, 255, 255))))
     )
     let undoHash = hash("20")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: undoHash,
         operation: .undo(.init(targetPatchHash: blendHash))
@@ -80,7 +80,7 @@ struct ChunkManagerTests {
     )
 
     await #expect(throws: ChunkManagerError.missingParent(missing, invalid.chunk)) {
-      try await manager.apply(
+      try await manager.accept(
         patch(hash: hash("10"), operations: [.blend(valid), .blend(invalid)]))
     }
     #expect(try await manager.snapshot(x: 0, y: 0) == nil)
@@ -91,7 +91,7 @@ struct ChunkManagerTests {
   func rejectsMissingUndoTargetWithoutMutation() async throws {
     let manager = ChunkManager()
     let parentHash = hash("10")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: parentHash,
         operation: .blend(try blendOperation(color: .init(255, 0, 0, 255)))
@@ -100,7 +100,7 @@ struct ChunkManagerTests {
 
     let missing = hash("99")
     await #expect(throws: ChunkManagerError.missingParent(missing, TileChunk(x: 0, y: 0))) {
-      try await manager.apply(
+      try await manager.accept(
         patch(
           hash: hash("20"),
           operation: .undo(UndoOperation(targetPatchHash: missing))
@@ -115,11 +115,11 @@ struct ChunkManagerTests {
     let manager = ChunkManager()
     let chunk = TileChunk(x: 0, y: 0)
     let target = hash("01")
-    _ = try await manager.apply(patch(hash: target, operation: .blend(try blendOperation(color: .init(1, 2, 3, 255)))))
+    _ = try await manager.accept(patch(hash: target, operation: .blend(try blendOperation(color: .init(1, 2, 3, 255)))))
     let before = try await manager.snapshot(x: 0, y: 0)
 
     await #expect(throws: ChunkManagerError.duplicateChunk(chunk)) {
-      try await manager.apply(
+      try await manager.accept(
         patch(
           hash: hash("10"),
           operations: [
@@ -137,7 +137,7 @@ struct ChunkManagerTests {
     let chunk = TileChunk(x: 0, y: 0)
 
     await #expect(throws: ChunkManagerError.selfParent(patchHash, chunk)) {
-      try await manager.apply(
+      try await manager.accept(
         patch(
           hash: patchHash,
           operation: .undo(UndoOperation(targetPatchHash: patchHash))
@@ -149,7 +149,7 @@ struct ChunkManagerTests {
   func undoAndRedoRebuildTheSnapshot() async throws {
     let manager = ChunkManager()
     let blendHash = hash("10")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: blendHash,
         operation: ChromatographBackend.Operation.blend(
@@ -159,7 +159,7 @@ struct ChunkManagerTests {
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [255, 0, 0, 255])
 
     let undoHash = hash("20")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: undoHash,
         operation: ChromatographBackend.Operation.undo(
@@ -168,7 +168,7 @@ struct ChunkManagerTests {
       ))
     #expect(try await manager.snapshot(x: 0, y: 0)?.prefix(4) == [0, 0, 0, 0])
 
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: hash("30"),
         operation: ChromatographBackend.Operation.undo(
@@ -182,7 +182,7 @@ struct ChunkManagerTests {
   func highestHashUndoBranchWins() async throws {
     let manager = ChunkManager()
     let blendHash = hash("10")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: blendHash,
         operation: ChromatographBackend.Operation.blend(
@@ -191,21 +191,21 @@ struct ChunkManagerTests {
       ))
 
     let firstUndo = hash("20")
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: firstUndo,
         operation: ChromatographBackend.Operation.undo(
           UndoOperation(targetPatchHash: blendHash)
         )
       ))
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: hash("70"),
         operation: ChromatographBackend.Operation.undo(
           UndoOperation(targetPatchHash: firstUndo)
         )
       ))
-    try await manager.apply(
+    try await manager.accept(
       patch(
         hash: hash("90"),
         operation: ChromatographBackend.Operation.undo(
@@ -227,7 +227,7 @@ struct ChunkManagerTests {
     let storedPatch = try canonicalPatch(operations: [.blend(try blendOperation(color: .init(255, 0, 0, 255)))])
     let patchHash = storedPatch.hash
     let firstManager = ChunkManager(store: store)
-    try await firstManager.apply(storedPatch)
+    try await firstManager.accept(storedPatch)
 
     let restoredManager = ChunkManager(store: try FileSystemChunkStore(storageDirectory: root))
     let restored = try await restoredManager.latestSnapshots(for: [.init(x: 0, y: 0)])
@@ -253,7 +253,8 @@ struct ChunkManagerTests {
       opacity: blue.opacity,
       payloadHash: blue.payloadHash
     ))])
-    try await firstManager.apply(secondPatch)
+    try await firstManager.accept(secondPatch)
+    _ = try await firstManager.latestSnapshots(for: [.init(x: 0, y: 0)])
     let latestSnapshotFiles = try FileManager.default.contentsOfDirectory(
       at: snapshotDirectory,
       includingPropertiesForKeys: nil
@@ -306,10 +307,44 @@ struct ChunkManagerTests {
       payloadHash: blend.payloadHash
     ))])
 
-    let snapshots = try await manager.apply(applicable)
+    let affectedChunks = try await manager.accept(applicable)
+    let snapshots = try await manager.latestSnapshots(for: affectedChunks)
 
+    #expect(affectedChunks == [TileChunk(x: 0, y: 0)])
     #expect(snapshots.count == 1)
     #expect(try store.patch(hash: applicable.hash) == applicable)
+  }
+
+  @Test
+  func snapshotQueueCalculatesAcceptedChunksAsynchronously() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(
+      path: "chromatograph-snapshot-queue-\(UUID().uuidString)",
+      directoryHint: .isDirectory
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try FileSystemChunkStore(storageDirectory: root)
+    let manager = ChunkManager(store: store)
+    let broadcaster = PatchBroadcaster()
+    let queue = SnapshotQueue(
+      chunks: manager,
+      broadcaster: broadcaster,
+      logger: .init(label: "SnapshotQueueTests")
+    )
+    let accepted = try canonicalPatch(operations: [
+      .blend(try blendOperation(chunk: .init(x: -1, y: -1), color: .init(7, 8, 9, 255)))
+    ])
+    let affectedChunks = try await manager.accept(accepted)
+
+    await queue.enqueue(affectedChunks)
+    await queue.enqueue(affectedChunks)
+    await queue.waitUntilIdle()
+
+    let snapshotDirectory = root.appending(
+      path: "snapshots/-1/-1", directoryHint: .isDirectory)
+    let files = try FileManager.default.contentsOfDirectory(
+      at: snapshotDirectory, includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "png" }
+    #expect(files.count == 1)
   }
 }
 

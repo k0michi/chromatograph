@@ -55,9 +55,9 @@ actor ChunkManager {
     self.patchCache = LRUCache(capacity: hotPatchCapacity)
   }
 
-  /// Validates the Patch DAG, persists the Patch, then updates derived DAG and snapshot state.
-  /// The immutable Patch is the commit point; snapshots are disposable derived data.
-  func apply(_ patch: Patch) throws -> [ChunkSnapshot] {
+  /// Validates the Patch DAG, persists the Patch, and updates the in-memory DAG.
+  /// Snapshot calculation is deliberately delegated to SnapshotQueue.
+  func accept(_ patch: Patch) throws -> [TileChunk] {
     try loadIfNeeded()
     guard !committedHashes.contains(patch.hash) else {
       throw ChunkManagerError.duplicatePatch(patch.hash)
@@ -86,31 +86,10 @@ actor ChunkManager {
     headPatchHashes = candidateHeadPatchHashes
     committedHashes.insert(patch.hash)
     chunksByPatchHash[patch.hash] = touched
-
-    var candidateSnapshots: [TileChunkKey: [UInt8]] = [:]
     for key in touched {
-      candidateSnapshots[key] = try render(entriesByChunk[key] ?? [])
+      snapshotCache.remove(key)
     }
-    let cachedSnapshots = try touched.sorted().map { key in
-      let head = headPatchHashes[key] ?? patch.hash
-      return CachedChunkSnapshot(
-        snapshot: ChunkSnapshot(
-          chunk: TileChunk(x: key.x, y: key.y),
-          headPatchHash: head,
-          imageBytes: try PNGCodec.encodeRGBA8(
-            candidateSnapshots[key]!,
-            width: Self.tileSize,
-            height: Self.tileSize
-          )
-        ),
-        stateHash: try stateHash(entriesByChunk[key] ?? [])
-      )
-    }
-    try store.storeSnapshots(cachedSnapshots)
-    for (key, snapshot) in candidateSnapshots {
-      snapshotCache.set(key, snapshot)
-    }
-    return cachedSnapshots.map(\.snapshot)
+    return touched.sorted().map { TileChunk(x: $0.x, y: $0.y) }
   }
 
   func snapshot(x: Int32, y: Int32) throws -> [UInt8]? {
@@ -517,13 +496,18 @@ private struct LRUCache<Key: Hashable, Value> {
     }
   }
 
+  mutating func remove(_ key: Key) {
+    storage[key] = nil
+    if let index = recency.firstIndex(of: key) { recency.remove(at: index) }
+  }
+
   private mutating func touch(_ key: Key) {
     if let index = recency.firstIndex(of: key) { recency.remove(at: index) }
     recency.append(key)
   }
 }
 
-private struct TileChunkKey: Hashable, Comparable {
+struct TileChunkKey: Hashable, Comparable {
   let x: Int32
   let y: Int32
 
